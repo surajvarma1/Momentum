@@ -38,6 +38,7 @@ let clientInstance: SupabaseClient | null = null;
 
 export const getSupabaseClient = (): SupabaseClient => {
   if (!clientInstance) {
+    const hasWebSocket = typeof globalThis !== 'undefined' && typeof (globalThis as any).WebSocket !== 'undefined';
     clientInstance = createClient(supabaseUrl, supabaseAnonKey, {
       auth: {
         storage: SecureAuthStorage,
@@ -45,6 +46,23 @@ export const getSupabaseClient = (): SupabaseClient => {
         persistSession: true,
         detectSessionInUrl: false,
       },
+      ...(!hasWebSocket
+        ? {
+            realtime: {
+              transport: class FallbackWebSocket {
+                static readonly CONNECTING = 0;
+                static readonly OPEN = 1;
+                static readonly CLOSING = 2;
+                static readonly CLOSED = 3;
+                readyState = 1;
+                addEventListener() {}
+                removeEventListener() {}
+                send() {}
+                close() {}
+              } as any,
+            },
+          }
+        : {}),
     });
   }
   return clientInstance;

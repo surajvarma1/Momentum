@@ -270,4 +270,208 @@ describe('AI Goal Decomposer Domain & Security', () => {
     });
   });
 
+  describe('Multi-Provider AI Architecture', () => {
+    const originalFetch = (globalThis as any).fetch;
+
+    afterEach(() => {
+      (globalThis as any).fetch = originalFetch;
+    });
+
+    it('generates decomposition plan via OpenRouter when selected', async () => {
+      const service = new SupabaseAIDecomposerService();
+      process.env.EXPO_PUBLIC_OPENROUTER_API_KEY = 'sk-or-test-key';
+
+      (globalThis as any).fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  goalSummary: 'Plan by OpenRouter',
+                  milestones: [{ id: 'm-1', title: 'Phase 1', description: null, order: 1 }],
+                  proposedTasks: [
+                    {
+                      title: 'Day 1: Setup project',
+                      description: 'Install dependencies',
+                      priority: 'HIGH',
+                      energyLevel: 'HIGH',
+                      estimatedDurationMinutes: 30,
+                      suggestedDeadline: null,
+                      milestoneId: 'm-1',
+                      subtasks: ['Action 1'],
+                    },
+                  ],
+                  assumptions: ['Built via OpenRouter'],
+                }),
+              },
+            },
+          ],
+        }),
+      });
+
+      const proposal = await service.decomposeGoal({
+        goalDescription: 'Build full stack application',
+        preferredSessionMinutes: 30,
+        includeExistingCommitments: false,
+        timezone: 'UTC',
+        provider: 'openrouter',
+      });
+
+      expect(proposal.goalSummary).toBe('Plan by OpenRouter');
+      expect(proposal.providerUsed).toContain('OpenRouter');
+    });
+
+    it('generates decomposition plan via Google Gemini when selected', async () => {
+      const service = new SupabaseAIDecomposerService();
+      process.env.EXPO_PUBLIC_GEMINI_API_KEY = 'AIzaSyTestKey';
+
+      (globalThis as any).fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    text: JSON.stringify({
+                      goalSummary: 'Plan by Google Gemini',
+                      milestones: [{ id: 'm-1', title: 'Phase 1', description: null, order: 1 }],
+                      proposedTasks: [
+                        {
+                          title: 'Day 1: Research Architecture',
+                          description: 'Analyze best practices',
+                          priority: 'HIGH',
+                          energyLevel: 'HIGH',
+                          estimatedDurationMinutes: 25,
+                          suggestedDeadline: null,
+                          milestoneId: 'm-1',
+                          subtasks: ['Read specs'],
+                        },
+                      ],
+                      assumptions: ['Built via Gemini'],
+                    }),
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      });
+
+      const proposal = await service.decomposeGoal({
+        goalDescription: 'Learn AI architecture',
+        preferredSessionMinutes: 25,
+        includeExistingCommitments: false,
+        timezone: 'UTC',
+        provider: 'gemini',
+      });
+
+      expect(proposal.goalSummary).toBe('Plan by Google Gemini');
+      expect(proposal.providerUsed).toContain('Google Gemini');
+    });
+
+    it('generates decomposition plan via NVIDIA NIM when selected', async () => {
+      const service = new SupabaseAIDecomposerService();
+      process.env.EXPO_PUBLIC_NVIDIA_API_KEY = 'nvapi-test-key';
+
+      (globalThis as any).fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  goalSummary: 'Plan by NVIDIA NIM',
+                  milestones: [{ id: 'm-1', title: 'Phase 1', description: null, order: 1 }],
+                  proposedTasks: [
+                    {
+                      title: 'Day 1: Deploy model',
+                      description: 'Configure TensorRT',
+                      priority: 'HIGH',
+                      energyLevel: 'HIGH',
+                      estimatedDurationMinutes: 45,
+                      suggestedDeadline: null,
+                      milestoneId: 'm-1',
+                      subtasks: ['Benchmark latency'],
+                    },
+                  ],
+                  assumptions: ['Built via NVIDIA NIM'],
+                }),
+              },
+            },
+          ],
+        }),
+      });
+
+      const proposal = await service.decomposeGoal({
+        goalDescription: 'Deploy model with NVIDIA NIM',
+        preferredSessionMinutes: 45,
+        includeExistingCommitments: false,
+        timezone: 'UTC',
+        provider: 'nvidia',
+      });
+
+      expect(proposal.goalSummary).toBe('Plan by NVIDIA NIM');
+      expect(proposal.providerUsed).toContain('NVIDIA NIM');
+    });
+
+    it('fails over to next available provider if primary provider returns catalog error', async () => {
+      const service = new SupabaseAIDecomposerService();
+      process.env.EXPO_PUBLIC_OPENROUTER_API_KEY = 'sk-or-test-key';
+
+      let callCount = 0;
+      (globalThis as any).fetch = jest.fn().mockImplementation((url: string) => {
+        callCount++;
+        // If Bytez fails with catalog 404, fall over to OpenRouter
+        if (url.includes('bytez.com')) {
+          return Promise.resolve({
+            ok: false,
+            status: 404,
+            text: async () => JSON.stringify({ error: 'Model does not exist in Bytez catalog' }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    goalSummary: 'Failover Plan via OpenRouter',
+                    milestones: [{ id: 'm-1', title: 'Phase 1', description: null, order: 1 }],
+                    proposedTasks: [
+                      {
+                        title: 'Day 1: Warmup & stretch',
+                        description: 'Initial session',
+                        priority: 'HIGH',
+                        energyLevel: 'HIGH',
+                        estimatedDurationMinutes: 30,
+                        suggestedDeadline: null,
+                        milestoneId: 'm-1',
+                        subtasks: ['Warmup'],
+                      },
+                    ],
+                    assumptions: ['Auto failover worked'],
+                  }),
+                },
+              },
+            ],
+          }),
+        });
+      });
+
+      const proposal = await service.decomposeGoal({
+        goalDescription: 'Build workout plan in 30 days',
+        preferredSessionMinutes: 30,
+        includeExistingCommitments: false,
+        timezone: 'UTC',
+        provider: 'auto',
+      });
+
+      expect(proposal.goalSummary).toBe('Failover Plan via OpenRouter');
+      expect(callCount).toBeGreaterThan(0);
+    });
+  });
+
 });

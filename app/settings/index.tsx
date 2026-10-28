@@ -101,20 +101,20 @@ export default function SettingsScreen() {
             <View>
               <View style={styles.aiHeaderRow}>
                 <Text style={[styles.label, { color: colors.textPrimary }]}>
-                  Bytez AI Service
+                  AI Intelligence Providers
                 </Text>
                 <Badge
-                  label="Server Managed"
+                  label="Multi-Model Active"
                   color={{ bg: '#052e16', text: '#4ADE80' }}
                   size="sm"
                 />
               </View>
               <Text style={[styles.sublabel, { color: colors.textSecondary, marginTop: 2 }]}>
-                Model: Qwen/Qwen3-4B via Bytez API
+                Supported: OpenRouter, Gemini, NVIDIA NIM, and Bytez
               </Text>
               <View style={[styles.privacyBox, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border }]}>
                 <Text style={[styles.privacyText, { color: colors.textSecondary }]}>
-                  🔒 Goals are processed securely via encrypted backend. No API keys are stored on this device, and no personal task data is used for model training.
+                  🔒 Configure your API keys securely in root .env. Supports free OpenRouter models, Gemini 1.5/2.0, NVIDIA NIM, and Bytez.
                 </Text>
               </View>
             </View>

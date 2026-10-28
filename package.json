@@ -5,6 +5,7 @@
   "dependencies": {
     "@react-native-community/netinfo": "12.0.1",
     "@supabase/supabase-js": "^2.118.0",
+    "bytez": "^0.7.0",
     "bytez.js": "^3.0.0",
     "expo": "~58.0.20",
     "expo-constants": "~58.0.13",

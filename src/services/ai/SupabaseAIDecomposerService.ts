@@ -9,6 +9,12 @@ import {
 } from '../../domain/ai/AIDecomposerTypes';
 import { getSupabaseClient, isSupabaseConfigured } from '../supabase/supabaseClient';
 
+export interface AIProviderResult {
+  rawJson: string;
+  providerName: string;
+  modelName: string;
+}
+
 export class SupabaseAIDecomposerService implements IAIDecomposerService {
   constructor(private client: SupabaseClient = getSupabaseClient()) {}
 
@@ -23,80 +29,6 @@ export class SupabaseAIDecomposerService implements IAIDecomposerService {
     );
     const persona = this.detectGoalPersona(validatedInput.goalDescription);
     const sessionTime = validatedInput.preferredSessionMinutes || 25;
-
-    // 3. If Supabase is configured, attempt backend Edge Function first
-    if (isSupabaseConfigured()) {
-      let timeoutId: ReturnType<typeof setTimeout> | undefined;
-      try {
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          timeoutId = setTimeout(() => reject(new Error('AI request timed out (>15s)')), 15000);
-        });
-
-        const invokePromise = this.client.functions.invoke('ai-decompose', {
-          body: validatedInput,
-        });
-
-        const response: any = await Promise.race([invokePromise, timeoutPromise]);
-
-        if (response.error) {
-          let errorMessage = response.error.message || 'Edge Function returned a non-2xx status code';
-          const errorResponse = response.error.context;
-          if (errorResponse && typeof errorResponse.clone === 'function') {
-            try {
-              const errorBody = await errorResponse.clone().json();
-              if (typeof errorBody?.error === 'string') {
-                errorMessage = typeof errorBody.details === 'string'
-                  ? `${errorBody.error}: ${errorBody.details}`
-                  : errorBody.error;
-              }
-            } catch {
-              try {
-                const text = await errorResponse.clone().text();
-                if (text) errorMessage = text;
-              } catch {
-                // Keep default
-              }
-            }
-          }
-          console.warn('Backend Supabase AI function unavailable (' + errorMessage + '), connecting directly to Bytez AI...');
-        } else if (response.data) {
-          const sanitizedProposal = this.sanitizeProposal(response.data);
-          this.ensureSuggestedDeadlines(sanitizedProposal, dayDates);
-          return GoalDecompositionProposalSchema.parse(sanitizedProposal);
-        }
-      } catch (err: any) {
-        console.warn('Supabase Edge Function invocation failed (' + err.message + '), connecting directly to Bytez AI...');
-      } finally {
-        if (timeoutId) clearTimeout(timeoutId);
-      }
-    }
-
-    // 4. Direct Bytez AI Model Connection (pure AI model generation, zero mock data)
-    return this.callBytezAI(validatedInput, persona, totalDays, dayDates, sessionTime);
-  }
-
-  private async callBytezAI(
-    input: DecomposeGoalInput,
-    persona: { role: string; instructions: string },
-    totalDays: number,
-    dayDates: string[],
-    sessionTime: number,
-  ): Promise<GoalDecompositionProposal> {
-    const apiKey =
-      process.env.EXPO_PUBLIC_BYTEZ_API_KEY ||
-      process.env.BYTEZ_API_KEY ||
-      '0026a51ee9cb158a930840b63f2d19f5';
-
-    const model =
-      process.env.EXPO_PUBLIC_BYTEZ_MODEL ||
-      process.env.BYTEZ_MODEL ||
-      'Qwen/Qwen3-4B';
-
-    if (!apiKey) {
-      throw new Error(
-        'AI Goal Decomposer requires BYTEZ_API_KEY to be configured. Mock data is disabled in this application.',
-      );
-    }
 
     const systemPrompt = `You are a ${persona.role}. You are an elite AI task decomposition agent.
 You MUST output ONLY a valid JSON object matching the exact schema requested without markdown code fences or conversation.
@@ -121,10 +53,10 @@ Your response must strictly conform to:
   "assumptions": [string]
 }`;
 
-    const userPrompt = `Goal: "${input.goalDescription}"
+    const userPrompt = `Goal: "${validatedInput.goalDescription}"
 Target Timeline: Exactly ${totalDays} days.
 Daily Focus Duration: ${sessionTime} minutes per session.
-Timezone: ${input.timezone || 'UTC'}
+Timezone: ${validatedInput.timezone || 'UTC'}
 
 Specialist Guidance:
 ${persona.instructions}
@@ -136,16 +68,247 @@ REQUIREMENTS:
 4. Calibrate intensity realistically for a ${sessionTime}-minute daily session.
 5. Strictly return valid raw JSON only.`;
 
+    const selectedProvider = validatedInput.provider || 'auto';
+
+    // Provider execution list based on user preference or automatic failover
+    const providerQueue = this.resolveProviderQueue(selectedProvider);
+    const errorsEncountered: string[] = [];
+
+    for (const provider of providerQueue) {
+      try {
+        let result: AIProviderResult | null = null;
+        if (provider === 'openrouter') {
+          result = await this.callOpenRouter(systemPrompt, userPrompt);
+        } else if (provider === 'gemini') {
+          result = await this.callGemini(systemPrompt, userPrompt);
+        } else if (provider === 'nvidia') {
+          result = await this.callNvidiaNIM(systemPrompt, userPrompt);
+        } else if (provider === 'bytez') {
+          result = await this.callBytez(systemPrompt, userPrompt);
+        } else if (provider === 'supabase') {
+          result = await this.callSupabaseEdge(validatedInput);
+        }
+
+        if (result && result.rawJson) {
+          const cleaned = result.rawJson
+            .replace(/```json\s*/gi, '')
+            .replace(/```\s*/g, '')
+            .trim();
+
+          const parsedProposal = JSON.parse(cleaned);
+          const sanitizedProposal = this.sanitizeProposal(parsedProposal);
+          this.ensureSuggestedDeadlines(sanitizedProposal, dayDates);
+          sanitizedProposal.providerUsed = `${result.providerName} (${result.modelName})`;
+          return GoalDecompositionProposalSchema.parse(sanitizedProposal);
+        }
+      } catch (err: any) {
+        errorsEncountered.push(`[${provider.toUpperCase()}]: ${err.message}`);
+        console.warn(`Provider ${provider} failed: ${err.message}. Trying next available provider...`);
+      }
+    }
+
+    // If all providers in the queue failed, throw the detailed aggregated error
+    throw new Error(
+      `AI Service Error:\n${errorsEncountered.join('\n') || 'No AI providers were able to process this request.'}`,
+    );
+  }
+
+  private resolveProviderQueue(preference: string): Array<'openrouter' | 'gemini' | 'nvidia' | 'bytez' | 'supabase'> {
+    if (preference !== 'auto') {
+      return [preference as any];
+    }
+
+    const openRouterKey = process.env.EXPO_PUBLIC_OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY;
+    const geminiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+    const nvidiaKey = process.env.EXPO_PUBLIC_NVIDIA_API_KEY || process.env.NVIDIA_API_KEY;
+    const bytezKey = process.env.EXPO_PUBLIC_BYTEZ_API_KEY || process.env.BYTEZ_API_KEY;
+
+    const queue: Array<'openrouter' | 'gemini' | 'nvidia' | 'bytez' | 'supabase'> = [];
+
+    // Prioritize providers that have configured API keys
+    if (openRouterKey) queue.push('openrouter');
+    if (geminiKey) queue.push('gemini');
+    if (nvidiaKey) queue.push('nvidia');
+    if (isSupabaseConfigured()) queue.push('supabase');
+    if (bytezKey) queue.push('bytez');
+
+    // Default cascade if none configured specifically
+    if (queue.length === 0) {
+      queue.push('openrouter', 'gemini', 'nvidia', 'bytez');
+    }
+
+    return queue;
+  }
+
+  // 1. OPENROUTER API
+  async callOpenRouter(systemPrompt: string, userPrompt: string): Promise<AIProviderResult> {
+    const key = process.env.EXPO_PUBLIC_OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY;
+    const model =
+      process.env.EXPO_PUBLIC_OPENROUTER_MODEL ||
+      process.env.OPENROUTER_MODEL ||
+      'google/gemini-2.0-flash-exp:free';
+
+    if (!key) {
+      throw new Error('OPENROUTER_API_KEY not configured in .env');
+    }
+
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${key}`,
+        'HTTP-Referer': 'https://momentum.app',
+        'X-Title': 'Momentum Todo App',
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: 0.2,
+        max_tokens: 4096,
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      let msg = errText;
+      try {
+        const errObj = JSON.parse(errText);
+        if (errObj.error?.message) msg = errObj.error.message;
+      } catch {}
+      throw new Error(`OpenRouter (${response.status}): ${msg}`);
+    }
+
+    const data = await response.json();
+    const rawJson = data?.choices?.[0]?.message?.content || '';
+    if (!rawJson) throw new Error('OpenRouter returned empty message content');
+
+    return { rawJson, providerName: 'OpenRouter', modelName: model };
+  }
+
+  // 2. GOOGLE GEMINI API
+  async callGemini(systemPrompt: string, userPrompt: string): Promise<AIProviderResult> {
+    const key = process.env.EXPO_PUBLIC_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+    const model =
+      process.env.EXPO_PUBLIC_GEMINI_MODEL ||
+      process.env.GEMINI_MODEL ||
+      'gemini-1.5-flash';
+
+    if (!key) {
+      throw new Error('GEMINI_API_KEY not configured in .env');
+    }
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }],
+          },
+        ],
+        generationConfig: {
+          temperature: 0.2,
+          maxOutputTokens: 4096,
+          responseMimeType: 'application/json',
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      let msg = errText;
+      try {
+        const errObj = JSON.parse(errText);
+        if (errObj.error?.message) msg = errObj.error.message;
+      } catch {}
+      throw new Error(`Gemini (${response.status}): ${msg}`);
+    }
+
+    const data = await response.json();
+    const rawJson = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    if (!rawJson) throw new Error('Gemini returned empty content');
+
+    return { rawJson, providerName: 'Google Gemini', modelName: model };
+  }
+
+  // 3. NVIDIA NIM API
+  async callNvidiaNIM(systemPrompt: string, userPrompt: string): Promise<AIProviderResult> {
+    const key = process.env.EXPO_PUBLIC_NVIDIA_API_KEY || process.env.NVIDIA_API_KEY;
+    const model =
+      process.env.EXPO_PUBLIC_NVIDIA_MODEL ||
+      process.env.NVIDIA_MODEL ||
+      'nvidia/llama-3.1-nemotron-70b-instruct';
+
+    if (!key) {
+      throw new Error('NVIDIA_API_KEY not configured in .env');
+    }
+
+    const response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: 0.2,
+        max_tokens: 4096,
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      let msg = errText;
+      try {
+        const errObj = JSON.parse(errText);
+        if (errObj.error?.message) msg = errObj.error.message;
+      } catch {}
+      throw new Error(`NVIDIA NIM (${response.status}): ${msg}`);
+    }
+
+    const data = await response.json();
+    const rawJson = data?.choices?.[0]?.message?.content || '';
+    if (!rawJson) throw new Error('NVIDIA NIM returned empty content');
+
+    return { rawJson, providerName: 'NVIDIA NIM', modelName: model };
+  }
+
+  // 4. BYTEZ API
+  async callBytez(systemPrompt: string, userPrompt: string): Promise<AIProviderResult> {
+    const key =
+      process.env.EXPO_PUBLIC_BYTEZ_API_KEY ||
+      process.env.BYTEZ_API_KEY ||
+      '0026a51ee9cb158a930840b63f2d19f5';
+    const model =
+      process.env.EXPO_PUBLIC_BYTEZ_MODEL ||
+      process.env.BYTEZ_MODEL ||
+      'Qwen/Qwen3-4B';
+
+    if (!key) {
+      throw new Error('BYTEZ_API_KEY not configured in .env');
+    }
+
     let rawJson = '';
     let lastError = '';
 
-    // Attempt 1: Bytez OpenAI-compatible endpoint
+    // Attempt A: Bytez OpenAI-compatible endpoint
     try {
       const response = await fetch('https://api.bytez.com/models/v2/openai/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
+          Authorization: `Bearer ${key}`,
         },
         body: JSON.stringify({
           model,
@@ -153,7 +316,7 @@ REQUIREMENTS:
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userPrompt },
           ],
-          temperature: 0.3,
+          temperature: 0.2,
           max_tokens: 4096,
         }),
       });
@@ -163,27 +326,25 @@ REQUIREMENTS:
         rawJson = data?.choices?.[0]?.message?.content || '';
       } else {
         const errorText = await response.text();
-        let parsed = errorText;
         try {
           const errObj = JSON.parse(errorText);
-          if (errObj.error) parsed = errObj.error;
+          lastError = errObj.error || errorText;
         } catch {
-          // Keep raw
+          lastError = errorText;
         }
-        lastError = parsed;
       }
     } catch (e: any) {
       lastError = e.message;
     }
 
-    // Attempt 2: Bytez Native Model endpoint
+    // Attempt B: Bytez Native Model endpoint
     if (!rawJson) {
       try {
         const response = await fetch(`https://api.bytez.com/models/v2/${model}`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Key ${apiKey}`,
+            Authorization: `Key ${key}`,
           },
           body: JSON.stringify({
             messages: [
@@ -192,7 +353,7 @@ REQUIREMENTS:
             ],
             params: {
               max_new_tokens: 4096,
-              temperature: 0.3,
+              temperature: 0.2,
             },
           }),
         });
@@ -204,14 +365,12 @@ REQUIREMENTS:
             (typeof data?.output === 'string' ? data.output : JSON.stringify(data?.output || ''));
         } else {
           const errorText = await response.text();
-          let parsedError = errorText;
           try {
             const errObj = JSON.parse(errorText);
-            if (errObj.error) parsedError = errObj.error;
+            lastError = errObj.error || errorText;
           } catch {
-            // Keep raw
+            lastError = errorText;
           }
-          lastError = parsedError;
         }
       } catch (e: any) {
         lastError = e.message;
@@ -219,25 +378,33 @@ REQUIREMENTS:
     }
 
     if (!rawJson) {
-      // NEVER RETURN MOCK DATA. Surface the actual error from the AI model service.
-      throw new Error(`AI Model Service Error: ${lastError || 'Unable to connect to Bytez AI.'}`);
+      throw new Error(`Bytez: ${lastError || 'Model does not exist or has yet to be added to the Bytez catalog'}`);
     }
 
-    const cleaned = rawJson
-      .replace(/```json\s*/gi, '')
-      .replace(/```\s*/g, '')
-      .trim();
+    return { rawJson, providerName: 'Bytez', modelName: model };
+  }
 
-    let parsedProposal: any;
-    try {
-      parsedProposal = JSON.parse(cleaned);
-    } catch (parseErr: any) {
-      throw new Error(`AI Model returned invalid JSON: ${parseErr.message}`);
+  // 5. SUPABASE EDGE FUNCTION PROXY
+  async callSupabaseEdge(validatedInput: DecomposeGoalInput): Promise<AIProviderResult | null> {
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Supabase Edge Function timed out (>15s)')), 15000),
+    );
+
+    const invokePromise = this.client.functions.invoke('ai-decompose', {
+      body: validatedInput,
+    });
+
+    const response: any = await Promise.race([invokePromise, timeoutPromise]);
+    if (response.error) {
+      throw new Error(response.error.message || 'Edge function returned non-2xx status code');
     }
 
-    const sanitizedProposal = this.sanitizeProposal(parsedProposal);
-    this.ensureSuggestedDeadlines(sanitizedProposal, dayDates);
-    return GoalDecompositionProposalSchema.parse(sanitizedProposal);
+    if (!response.data) return null;
+    return {
+      rawJson: JSON.stringify(response.data),
+      providerName: 'Supabase Edge Proxy',
+      modelName: 'Cloud AI',
+    };
   }
 
   private ensureSuggestedDeadlines(proposal: any, dayDates: string[]): void {
@@ -249,14 +416,11 @@ REQUIREMENTS:
     });
   }
 
-  /**
-   * Calculates the timeline span and assigns daily calendar dates starting from today.
-   */
   calculateTimeline(
     goalDescription: string,
     deadline?: string | null,
   ): { totalDays: number; dayDates: string[] } {
-    let days = 3; // Default 3 milestone tasks when no timeline or deadline is specified
+    let days = 3;
     const now = new Date();
 
     const dayMatch = goalDescription.match(/(?:in|for|within)?\s*(\d+)\s*(?:days?|day)/i);
@@ -274,7 +438,7 @@ REQUIREMENTS:
           }
         }
       } catch {
-        // Fallback to text parsing
+        // Fallback
       }
     } else if (dayMatch && dayMatch[1]) {
       days = Math.min(30, Math.max(1, parseInt(dayMatch[1], 10)));
@@ -294,9 +458,6 @@ REQUIREMENTS:
     return { totalDays: days, dayDates };
   }
 
-  /**
-   * Detects goal category to adopt the appropriate domain expert persona.
-   */
   detectGoalPersona(goal: string): {
     role: string;
     instructions: string;
@@ -391,6 +552,7 @@ REQUIREMENTS:
         subtasks: (t.subtasks || []).map((s: string) => sanitizeAIText(s)),
       })),
       assumptions: (raw.assumptions || []).map((a: string) => sanitizeAIText(a)),
+      providerUsed: raw.providerUsed ? String(raw.providerUsed) : undefined,
     };
   }
 }

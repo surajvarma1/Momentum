@@ -21,9 +21,10 @@ export const DecomposeGoalInputSchema = z.object({
     .default(25),
   includeExistingCommitments: z.boolean().default(false),
   timezone: z.string().default('UTC'),
+  provider: z.enum(['auto', 'openrouter', 'gemini', 'nvidia', 'bytez']).optional().default('auto'),
 });
 
-export type DecomposeGoalInput = z.infer<typeof DecomposeGoalInputSchema>;
+export type DecomposeGoalInput = z.input<typeof DecomposeGoalInputSchema>;
 
 export const ProposedSubtaskSchema = z.string().trim().min(1).max(100);
 
@@ -65,6 +66,7 @@ export const GoalDecompositionProposalSchema = z.object({
     .min(1, 'At least 1 task must be proposed')
     .max(35, 'Cannot exceed 35 tasks per decomposition'),
   assumptions: z.array(z.string().trim().max(200)).max(8).default([]),
+  providerUsed: z.string().optional(),
 });
 
 export type GoalDecompositionProposal = z.infer<typeof GoalDecompositionProposalSchema>;

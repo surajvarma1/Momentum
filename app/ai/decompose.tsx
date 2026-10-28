@@ -23,6 +23,8 @@ import {
   GoalDecompositionProposal,
 } from '../../src/domain/ai/AIDecomposerTypes';
 
+type ProviderChoice = 'auto' | 'openrouter' | 'gemini' | 'nvidia' | 'bytez';
+
 export default function AIDecomposeScreen() {
   const { colors } = useTheme();
 
@@ -33,6 +35,7 @@ export default function AIDecomposeScreen() {
   const [goalDescription, setGoalDescription] = useState('');
   const [deadline, setDeadline] = useState('');
   const [sessionDuration, setSessionDuration] = useState('25');
+  const [selectedProvider, setSelectedProvider] = useState<ProviderChoice>('auto');
   const [screenLoadedAt] = useState(() => Date.now());
 
   // Proposal result & selection
@@ -93,6 +96,7 @@ export default function AIDecomposeScreen() {
         preferredSessionMinutes: Math.min(240, Math.max(15, parsedDuration)),
         includeExistingCommitments: false,
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+        provider: selectedProvider,
       });
 
       setProposal(result);
@@ -101,7 +105,7 @@ export default function AIDecomposeScreen() {
       setSelectedTaskIndices(allIndices);
       setStep('review');
     } catch (err: any) {
-      setError(err.message || 'Failed to decompose goal. Please try again.');
+      setError(err.message || 'Failed to decompose goal. Please check your AI API key in .env or switch provider.');
       setStep('input');
     }
   };
@@ -161,39 +165,66 @@ export default function AIDecomposeScreen() {
     );
   };
 
+  const PROVIDER_OPTIONS: { id: ProviderChoice; label: string; badge: string }[] = [
+    { id: 'auto', label: 'Auto', badge: 'Smart' },
+    { id: 'openrouter', label: 'OpenRouter', badge: 'Free' },
+    { id: 'gemini', label: 'Gemini', badge: 'Fast' },
+    { id: 'nvidia', label: 'NVIDIA NIM', badge: 'Pro' },
+    { id: 'bytez', label: 'Bytez', badge: 'API' },
+  ];
+
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <ScreenHeader title="AI Goal Decomposer" />
 
       <ScrollView contentContainerStyle={{ padding: spacing.lg }}>
-        {/* Subtitle */}
+        {/* Header Title */}
         <View style={{ marginBottom: spacing.md }}>
           <View style={styles.titleRow}>
             <Text style={[styles.heading, { color: colors.textPrimary }]}>Decompose Goals into Action</Text>
-            <Badge
-              label="BYTEZ AI"
-              color={{ bg: colors.surface, text: colors.textSecondary }}
-              size="sm"
-            />
           </View>
           <Text style={{ fontSize: typography.fontSize.sm, color: colors.textSecondary, marginTop: spacing.xs }}>
-            Formulate milestones and size focused execution blocks with Bytez AI (Qwen/Qwen3-4B).
+            Formulate progressive milestones and day-by-day execution tasks using advanced AI.
           </Text>
         </View>
 
-        {/* AI Service Info Card */}
-        <Card style={[styles.apiNoticeCard, { borderColor: colors.borderLight, backgroundColor: colors.surface }]}>
-          <Text style={{ fontSize: typography.fontSize.xs, fontWeight: '700', color: colors.textPrimary }}>
-            🤖 Secure Backend Intelligence
+        {/* Provider Selector Chips */}
+        <View style={{ marginBottom: spacing.md }}>
+          <Text style={{ fontSize: typography.fontSize.xs, fontWeight: '700', color: colors.textSecondary, marginBottom: 8, letterSpacing: 0.5 }}>
+            AI ENGINE PROVIDER
           </Text>
-          <Text style={{ fontSize: typography.fontSize.xs, color: colors.textSecondary, marginTop: 4 }}>
-            Uses the Bytez Qwen3 server proxy. Configure its model and API key in the Supabase Edge Function environment.
-          </Text>
-        </Card>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.providerScroll}>
+            {PROVIDER_OPTIONS.map((p) => {
+              const active = selectedProvider === p.id;
+              return (
+                <Pressable
+                  key={p.id}
+                  onPress={() => setSelectedProvider(p.id)}
+                  style={[
+                    styles.providerChip,
+                    {
+                      borderColor: active ? colors.accent : colors.border,
+                      backgroundColor: active ? colors.surface : colors.background,
+                    },
+                  ]}
+                >
+                  <Text style={[styles.providerLabel, { color: active ? colors.accent : colors.textPrimary }]}>
+                    {p.label}
+                  </Text>
+                  <View style={[styles.providerBadge, { backgroundColor: active ? colors.accent + '25' : colors.surface }]}>
+                    <Text style={{ fontSize: 9, fontWeight: '700', color: active ? colors.accent : colors.textTertiary }}>
+                      {p.badge}
+                    </Text>
+                  </View>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
 
         {error && (
           <Card style={[styles.errorCard, { backgroundColor: colors.error + '20', borderColor: colors.error, marginBottom: spacing.md }]}>
-            <Text style={{ fontSize: typography.fontSize.xs, color: colors.error }}>{error}</Text>
+            <Text style={{ fontSize: typography.fontSize.xs, color: colors.error, fontWeight: '600' }}>{error}</Text>
           </Card>
         )}
 
@@ -202,7 +233,7 @@ export default function AIDecomposeScreen() {
           <View style={{ gap: spacing.md }}>
             <FormField
               label="Goal Description"
-              placeholder="e.g. Build and publish my portfolio website with React Native"
+              placeholder="e.g. Build my body in home in 30 days, or develop a mobile app in 14 days"
               value={goalDescription}
               onChangeText={setGoalDescription}
               multiline
@@ -230,7 +261,7 @@ export default function AIDecomposeScreen() {
               placeholder="Select target deadline from calendar…"
               value={deadline}
               onChange={setDeadline}
-              helperText="Optional target date to schedule your milestones"
+              helperText="Optional target date to calibrate daily roadmap"
             />
 
             <FormField
@@ -256,10 +287,10 @@ export default function AIDecomposeScreen() {
           <View style={styles.centerContainer}>
             <ActivityIndicator size="large" color={colors.accent} />
             <Text style={[styles.loadingTitle, { color: colors.textPrimary, marginTop: spacing.md }]}>
-              Formulating structured milestones...
+              Generating Structured Daily Roadmap...
             </Text>
             <Text style={{ fontSize: typography.fontSize.xs, color: colors.textSecondary, marginTop: spacing.xs, textAlign: 'center' }}>
-              Analyzing scope, prioritizing key deliverables, and sizing focused execution blocks.
+              Consulting specialized domain persona and calibrating sequential deliverables.
             </Text>
           </View>
         )}
@@ -269,7 +300,18 @@ export default function AIDecomposeScreen() {
           <View style={{ gap: spacing.md }}>
             {/* Goal Summary */}
             <Card style={{ padding: spacing.md }}>
-              <Text style={{ fontSize: typography.fontSize.xs, color: colors.textSecondary }}>PLAN SUMMARY</Text>
+              <View style={styles.planHeaderRow}>
+                <Text style={{ fontSize: typography.fontSize.xs, color: colors.textSecondary, fontWeight: '700' }}>
+                  PLAN SUMMARY
+                </Text>
+                {proposal.providerUsed && (
+                  <Badge
+                    label={proposal.providerUsed}
+                    color={{ bg: colors.surface, text: colors.accent }}
+                    size="sm"
+                  />
+                )}
+              </View>
               <Text style={{ fontSize: typography.fontSize.sm, color: colors.textPrimary, marginTop: 4, fontWeight: '600' }}>
                 {proposal.goalSummary}
               </Text>
@@ -278,7 +320,7 @@ export default function AIDecomposeScreen() {
             {/* Milestones */}
             {proposal.milestones.length > 0 && (
               <Card style={{ padding: spacing.md }}>
-                <Text style={{ fontSize: typography.fontSize.xs, color: colors.textSecondary, marginBottom: 8 }}>
+                <Text style={{ fontSize: typography.fontSize.xs, color: colors.textSecondary, marginBottom: 8, fontWeight: '700' }}>
                   MILESTONES ({proposal.milestones.length})
                 </Text>
                 {proposal.milestones.map((m) => (
@@ -387,7 +429,7 @@ export default function AIDecomposeScreen() {
             {/* Assumptions */}
             {proposal.assumptions.length > 0 && (
               <Card style={{ padding: spacing.md }}>
-                <Text style={{ fontSize: typography.fontSize.xs, color: colors.textSecondary, marginBottom: 4 }}>
+                <Text style={{ fontSize: typography.fontSize.xs, color: colors.textSecondary, marginBottom: 4, fontWeight: '700' }}>
                   KEY ASSUMPTIONS
                 </Text>
                 {proposal.assumptions.map((a, i) => (
@@ -451,6 +493,33 @@ const styles = StyleSheet.create({
     fontSize: typography.fontSize.xl,
     fontWeight: '700',
   },
+  providerScroll: {
+    gap: 8,
+    paddingVertical: 2,
+  },
+  providerChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: radii.full,
+    borderWidth: 1.5,
+    gap: 6,
+  },
+  providerLabel: {
+    fontSize: typography.fontSize.xs,
+    fontWeight: '600',
+  },
+  providerBadge: {
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: radii.sm,
+  },
+  planHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
   detectedPill: {
     paddingVertical: spacing.xs + 2,
     paddingHorizontal: spacing.md,
@@ -468,12 +537,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
     borderRadius: radii.md,
     borderWidth: 1,
-  },
-  apiNoticeCard: {
-    padding: spacing.md,
-    borderRadius: radii.md,
-    borderWidth: 1,
-    marginBottom: spacing.md,
   },
   centerContainer: {
     paddingVertical: 64,
