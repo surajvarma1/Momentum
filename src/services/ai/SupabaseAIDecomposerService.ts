@@ -90,13 +90,8 @@ REQUIREMENTS:
         }
 
         if (result && result.rawJson) {
-          const cleaned = result.rawJson
-            .replace(/```json\s*/gi, '')
-            .replace(/```\s*/g, '')
-            .trim();
-
-          const parsedProposal = JSON.parse(cleaned);
-          const sanitizedProposal = this.sanitizeProposal(parsedProposal);
+          const parsedProposal = this.extractJson(result.rawJson);
+          const sanitizedProposal = this.sanitizeProposal(parsedProposal, dayDates);
           this.ensureSuggestedDeadlines(sanitizedProposal, dayDates);
           sanitizedProposal.providerUsed = `${result.providerName} (${result.modelName})`;
           return GoalDecompositionProposalSchema.parse(sanitizedProposal);
@@ -191,7 +186,7 @@ REQUIREMENTS:
   // 2. GOOGLE GEMINI API
   async callGemini(systemPrompt: string, userPrompt: string): Promise<AIProviderResult> {
     const key = process.env.EXPO_PUBLIC_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
-    const model =
+    const configuredModel =
       process.env.EXPO_PUBLIC_GEMINI_MODEL ||
       process.env.GEMINI_MODEL ||
       'gemini-1.5-flash';
@@ -200,42 +195,56 @@ REQUIREMENTS:
       throw new Error('GEMINI_API_KEY not configured in .env');
     }
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            role: 'user',
-            parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }],
-          },
-        ],
-        generationConfig: {
-          temperature: 0.2,
-          maxOutputTokens: 4096,
-          responseMimeType: 'application/json',
-        },
-      }),
-    });
+    const modelsToTry = [configuredModel];
+    if (!modelsToTry.includes('gemini-1.5-flash')) modelsToTry.push('gemini-1.5-flash');
+    if (!modelsToTry.includes('gemini-2.0-flash-exp')) modelsToTry.push('gemini-2.0-flash-exp');
 
-    if (!response.ok) {
-      const errText = await response.text();
-      let msg = errText;
+    let lastError = '';
+    for (const currentModel of modelsToTry) {
       try {
-        const errObj = JSON.parse(errText);
-        if (errObj.error?.message) msg = errObj.error.message;
-      } catch {}
-      throw new Error(`Gemini (${response.status}): ${msg}`);
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${key}`;
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            contents: [
+              {
+                role: 'user',
+                parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }],
+              },
+            ],
+            generationConfig: {
+              temperature: 0.2,
+              maxOutputTokens: 4096,
+              responseMimeType: 'application/json',
+            },
+          }),
+        });
+
+        if (!response.ok) {
+          const errText = await response.text();
+          let msg = errText;
+          try {
+            const errObj = JSON.parse(errText);
+            if (errObj.error?.message) msg = errObj.error.message;
+          } catch {}
+          lastError = `Gemini (${response.status}) on ${currentModel}: ${msg}`;
+          continue;
+        }
+
+        const data = await response.json();
+        const rawJson = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        if (rawJson) {
+          return { rawJson, providerName: 'Google Gemini', modelName: currentModel };
+        }
+      } catch (e: any) {
+        lastError = e.message;
+      }
     }
 
-    const data = await response.json();
-    const rawJson = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    if (!rawJson) throw new Error('Gemini returned empty content');
-
-    return { rawJson, providerName: 'Google Gemini', modelName: model };
+    throw new Error(lastError || 'Gemini returned empty content');
   }
 
   // 3. NVIDIA NIM API
@@ -299,48 +308,54 @@ REQUIREMENTS:
       throw new Error('BYTEZ_API_KEY not configured in .env');
     }
 
+    const modelsToTry = [model];
+    if (model.includes('Qwen3') || model.includes('qwen3')) {
+      modelsToTry.push('Qwen/Qwen2.5-7B-Instruct', 'google/gemma-2-2b-it');
+    }
+
     let rawJson = '';
     let lastError = '';
 
-    // Attempt A: Bytez OpenAI-compatible endpoint
-    try {
-      const response = await fetch('https://api.bytez.com/models/v2/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${key}`,
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userPrompt },
-          ],
-          temperature: 0.2,
-          max_tokens: 4096,
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        rawJson = data?.choices?.[0]?.message?.content || '';
-      } else {
-        const errorText = await response.text();
-        try {
-          const errObj = JSON.parse(errorText);
-          lastError = errObj.error || errorText;
-        } catch {
-          lastError = errorText;
-        }
-      }
-    } catch (e: any) {
-      lastError = e.message;
-    }
-
-    // Attempt B: Bytez Native Model endpoint
-    if (!rawJson) {
+    for (const currentModel of modelsToTry) {
+      // Attempt A: Bytez OpenAI-compatible endpoint
       try {
-        const response = await fetch(`https://api.bytez.com/models/v2/${model}`, {
+        const response = await fetch('https://api.bytez.com/models/v2/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${key}`,
+          },
+          body: JSON.stringify({
+            model: currentModel,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userPrompt },
+            ],
+            temperature: 0.2,
+            max_tokens: 4096,
+          }),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          rawJson = data?.choices?.[0]?.message?.content || '';
+          if (rawJson) return { rawJson, providerName: 'Bytez', modelName: currentModel };
+        } else {
+          const errorText = await response.text();
+          try {
+            const errObj = JSON.parse(errorText);
+            lastError = errObj.error || errorText;
+          } catch {
+            lastError = errorText;
+          }
+        }
+      } catch (e: any) {
+        lastError = e.message;
+      }
+
+      // Attempt B: Bytez Native Model endpoint
+      try {
+        const response = await fetch(`https://api.bytez.com/models/v2/${currentModel}`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -363,6 +378,7 @@ REQUIREMENTS:
           rawJson =
             data?.output?.content?.[0]?.text ||
             (typeof data?.output === 'string' ? data.output : JSON.stringify(data?.output || ''));
+          if (rawJson) return { rawJson, providerName: 'Bytez', modelName: currentModel };
         } else {
           const errorText = await response.text();
           try {
@@ -407,12 +423,74 @@ REQUIREMENTS:
     };
   }
 
+  private extractJson(rawText: string): any {
+    const cleaned = rawText
+      .replace(/```json\s*/gi, '')
+      .replace(/```\s*/g, '')
+      .trim();
+
+    try {
+      return JSON.parse(cleaned);
+    } catch {
+      const firstBrace = cleaned.indexOf('{');
+      const lastBrace = cleaned.lastIndexOf('}');
+      if (firstBrace !== -1 && lastBrace > firstBrace) {
+        const jsonSubstring = cleaned.slice(firstBrace, lastBrace + 1);
+        return JSON.parse(jsonSubstring);
+      }
+      throw new Error(`AI Model returned invalid JSON formatting`);
+    }
+  }
+
+  private normalizeDeadline(val: any, fallback?: string): string | null {
+    if (typeof val === 'string' && val.trim().length > 0) {
+      const trimmed = val.trim();
+      const ts = Date.parse(trimmed);
+      if (!isNaN(ts)) {
+        return new Date(ts).toISOString();
+      }
+    }
+    if (fallback) {
+      const fbTs = Date.parse(fallback);
+      if (!isNaN(fbTs)) {
+        return new Date(fbTs).toISOString();
+      }
+    }
+    return null;
+  }
+
+  private normalizePriority(val: any): 'LOW' | 'MEDIUM' | 'HIGH' | 'IMPORTANT' {
+    if (typeof val === 'string') {
+      const u = val.toUpperCase().trim();
+      if (u === 'LOW' || u === 'MEDIUM' || u === 'HIGH' || u === 'IMPORTANT') return u;
+      if (u.includes('URGENT') || u.includes('CRITICAL')) return 'HIGH';
+    }
+    return 'MEDIUM';
+  }
+
+  private normalizeEnergy(val: any): 'LOW' | 'MEDIUM' | 'HIGH' {
+    if (typeof val === 'string') {
+      const u = val.toUpperCase().trim();
+      if (u === 'LOW' || u === 'MEDIUM' || u === 'HIGH') return u;
+    }
+    return 'MEDIUM';
+  }
+
+  private normalizeSubtasks(rawSubtasks: any): string[] {
+    if (!Array.isArray(rawSubtasks)) return [];
+    return rawSubtasks
+      .map((st: any) => {
+        const text = typeof st === 'string' ? st : (st?.title || st?.name || String(st || ''));
+        return sanitizeAIText(text).slice(0, 100).trim();
+      })
+      .filter((s: string) => s.length > 0)
+      .slice(0, 5);
+  }
+
   private ensureSuggestedDeadlines(proposal: any, dayDates: string[]): void {
     if (!Array.isArray(proposal.proposedTasks)) return;
     proposal.proposedTasks.forEach((task: any, index: number) => {
-      if (!task.suggestedDeadline && dayDates[index]) {
-        task.suggestedDeadline = dayDates[index];
-      }
+      task.suggestedDeadline = this.normalizeDeadline(task.suggestedDeadline, dayDates[index]);
     });
   }
 
@@ -532,27 +610,44 @@ REQUIREMENTS:
     };
   }
 
-  private sanitizeProposal(raw: any): any {
+  private sanitizeProposal(raw: any, dayDates?: string[]): any {
+    const rawTasks = Array.isArray(raw?.proposedTasks) ? raw.proposedTasks : [];
+    const rawMilestones = Array.isArray(raw?.milestones) ? raw.milestones : [];
+    const rawAssumptions = Array.isArray(raw?.assumptions) ? raw.assumptions : [];
+
     return {
-      goalSummary: sanitizeAIText(raw.goalSummary || ''),
-      milestones: (raw.milestones || []).map((m: any) => ({
-        id: String(m.id || 'm-1'),
-        title: sanitizeAIText(m.title || ''),
-        description: m.description ? sanitizeAIText(m.description) : null,
-        order: Number(m.order || 1),
+      goalSummary:
+        sanitizeAIText(String(raw?.goalSummary || '')).slice(0, 300).trim() ||
+        'Customized Daily Action Roadmap',
+      milestones: rawMilestones.map((m: any, idx: number) => ({
+        id: String(m?.id || `m-${idx + 1}`),
+        title:
+          sanitizeAIText(String(m?.title || `Phase ${idx + 1}`)).slice(0, 100).trim() ||
+          `Phase ${idx + 1}`,
+        description: m?.description ? sanitizeAIText(String(m.description)).slice(0, 300).trim() : null,
+        order: typeof m?.order === 'number' && Number.isInteger(m.order) ? m.order : idx + 1,
       })),
-      proposedTasks: (raw.proposedTasks || []).map((t: any) => ({
-        title: sanitizeAIText(t.title || ''),
-        description: t.description ? sanitizeAIText(t.description) : null,
-        priority: t.priority || 'MEDIUM',
-        energyLevel: t.energyLevel || 'MEDIUM',
-        estimatedDurationMinutes: Number(t.estimatedDurationMinutes || 25),
-        suggestedDeadline: t.suggestedDeadline || null,
-        milestoneId: t.milestoneId || null,
-        subtasks: (t.subtasks || []).map((s: string) => sanitizeAIText(s)),
-      })),
-      assumptions: (raw.assumptions || []).map((a: string) => sanitizeAIText(a)),
-      providerUsed: raw.providerUsed ? String(raw.providerUsed) : undefined,
+      proposedTasks: rawTasks.map((t: any, index: number) => {
+        const duration = Number(t?.estimatedDurationMinutes);
+        return {
+          title:
+            sanitizeAIText(String(t?.title || '')).slice(0, 200).trim() ||
+            `Day ${index + 1}: Action Item`,
+          description: t?.description ? sanitizeAIText(String(t.description)).slice(0, 500).trim() : null,
+          priority: this.normalizePriority(t?.priority),
+          energyLevel: this.normalizeEnergy(t?.energyLevel),
+          estimatedDurationMinutes:
+            !isNaN(duration) && duration >= 5 && duration <= 480 ? Math.round(duration) : 25,
+          suggestedDeadline: this.normalizeDeadline(t?.suggestedDeadline, dayDates?.[index]),
+          milestoneId: t?.milestoneId ? String(t.milestoneId).trim() : null,
+          subtasks: this.normalizeSubtasks(t?.subtasks),
+        };
+      }),
+      assumptions: rawAssumptions
+        .map((a: any) => sanitizeAIText(String(a || '')).slice(0, 200).trim())
+        .filter(Boolean)
+        .slice(0, 8),
+      providerUsed: raw?.providerUsed ? String(raw.providerUsed) : undefined,
     };
   }
 }

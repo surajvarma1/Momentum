@@ -6,7 +6,7 @@ export const DecomposeGoalInputSchema = z.object({
     .trim()
     .min(5, 'Goal description must be at least 5 characters')
     .max(500, 'Goal description must not exceed 500 characters'),
-  deadline: z.string().datetime().nullable().optional(),
+  deadline: z.string().nullable().optional(),
   availableTimeBudgetMinutes: z
     .number()
     .int()
@@ -42,7 +42,7 @@ export const ProposedTaskSchema = z.object({
     .int()
     .min(5, 'Duration must be at least 5 minutes')
     .max(480, 'Duration cannot exceed 8 hours (480 minutes)'),
-  suggestedDeadline: z.string().datetime().nullable().optional(),
+  suggestedDeadline: z.string().nullable().optional(),
   milestoneId: z.string().optional().nullable(),
   subtasks: z.array(ProposedSubtaskSchema).max(5).default([]),
 });

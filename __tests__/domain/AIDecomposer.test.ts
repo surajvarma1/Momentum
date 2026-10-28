@@ -472,6 +472,67 @@ describe('AI Goal Decomposer Domain & Security', () => {
       expect(proposal.goalSummary).toBe('Failover Plan via OpenRouter');
       expect(callCount).toBeGreaterThan(0);
     });
+
+    it('normalizes non-standard date formats (e.g. YYYY-MM-DD) and lowercase fields from AI models without Zod failure', async () => {
+      const service = new SupabaseAIDecomposerService();
+      process.env.EXPO_PUBLIC_OPENROUTER_API_KEY = 'sk-or-test-key';
+
+      (globalThis as any).fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  goalSummary: 'Plan with non-standard date format',
+                  milestones: [{ id: 'm-1', title: 'Phase 1', description: null, order: 1 }],
+                  proposedTasks: [
+                    {
+                      title: 'Day 1: Chest and triceps',
+                      description: 'Warmup and bench press',
+                      priority: 'high', // lowercase
+                      energyLevel: 'medium', // lowercase
+                      estimatedDurationMinutes: '30', // string number
+                      suggestedDeadline: '2026-10-29', // YYYY-MM-DD format (not ISO ending in Z)
+                      milestoneId: 'm-1',
+                      subtasks: ['3x10 pushups', '3x10 bench press'],
+                    },
+                    {
+                      title: 'Day 2: Back and biceps',
+                      description: 'Pullups and rows',
+                      priority: 'MEDIUM',
+                      energyLevel: 'HIGH',
+                      estimatedDurationMinutes: 45,
+                      suggestedDeadline: '2026-10-30 18:00:00', // date with space
+                      milestoneId: 'm-1',
+                      subtasks: ['3x8 pullups'],
+                    },
+                  ],
+                  assumptions: ['Calibrated without error'],
+                }),
+              },
+            },
+          ],
+        }),
+      });
+
+      const proposal = await service.decomposeGoal({
+        goalDescription: 'Build muscle at home in 30 days',
+        preferredSessionMinutes: 30,
+        includeExistingCommitments: false,
+        timezone: 'UTC',
+        provider: 'openrouter',
+      });
+
+      expect(proposal.proposedTasks).toHaveLength(2);
+      expect(proposal.proposedTasks[0].priority).toBe('HIGH');
+      expect(proposal.proposedTasks[0].energyLevel).toBe('MEDIUM');
+      expect(proposal.proposedTasks[0].estimatedDurationMinutes).toBe(30);
+      expect(proposal.proposedTasks[0].suggestedDeadline).toContain('T');
+      expect(proposal.proposedTasks[0].suggestedDeadline).toContain('Z');
+      expect(proposal.proposedTasks[1].suggestedDeadline).toContain('T');
+      expect(proposal.proposedTasks[1].suggestedDeadline).toContain('Z');
+    });
   });
 
 });
