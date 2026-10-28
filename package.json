@@ -49,5 +49,18 @@
   "overrides": {
     "zod": "^4.6.7"
   },
+  "expo": {
+    "install": {
+      "exclude": [
+        "expo",
+        "expo-constants",
+        "expo-font",
+        "expo-linking",
+        "expo-notifications",
+        "expo-router",
+        "expo-splash-screen"
+      ]
+    }
+  },
   "private": true
 }
