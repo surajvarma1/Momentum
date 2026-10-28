@@ -28,8 +28,9 @@ type ProviderChoice = 'auto' | 'openrouter' | 'gemini' | 'nvidia' | 'bytez';
 export default function AIDecomposeScreen() {
   const { colors } = useTheme();
 
-  // Step state: 'input' | 'loading' | 'review'
-  const [step, setStep] = useState<'input' | 'loading' | 'review'>('input');
+  // Step state: 'input' | 'loading' | 'review' | 'success'
+  const [step, setStep] = useState<'input' | 'loading' | 'review' | 'success'>('input');
+  const [createdCount, setCreatedCount] = useState(0);
 
   // Input fields
   const [goalDescription, setGoalDescription] = useState('');
@@ -120,6 +121,18 @@ export default function AIDecomposeScreen() {
     setSelectedTaskIndices(next);
   };
 
+  const handleBackToPrevious = () => {
+    if (step === 'review') {
+      setStep('input');
+    } else if (step === 'success') {
+      router.replace('/(tabs)/tasks');
+    } else if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/(tabs)/tasks');
+    }
+  };
+
   const handleApplyApproved = async () => {
     if (!proposal || isApplying) return;
 
@@ -137,12 +150,14 @@ export default function AIDecomposeScreen() {
       const container = ServiceContainer.getInstance();
       await container.applyGoalProposal.execute(approvedTasks);
       useUIStore.getState().incrementTasksRevision();
+      useUIStore.getState().setActiveFilter('all');
+      setCreatedCount(approvedTasks.length);
       setProposal(null);
-      Alert.alert(
-        'Tasks Created',
-        `Successfully added ${approvedTasks.length} tasks to your list!`,
-        [{ text: 'View Tasks', onPress: () => router.replace('/(tabs)/tasks') }],
-      );
+      setStep('success');
+      useUIStore.getState().showSnackbar(`Successfully added ${approvedTasks.length} tasks!`, 'success');
+      setTimeout(() => {
+        router.replace('/(tabs)/tasks');
+      }, 1400);
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Failed to save generated tasks.');
     } finally {
@@ -159,7 +174,10 @@ export default function AIDecomposeScreen() {
         {
           text: 'Discard',
           style: 'destructive',
-          onPress: () => router.back(),
+          onPress: () => {
+            if (router.canGoBack()) router.back();
+            else router.replace('/(tabs)/tasks');
+          },
         },
       ],
     );
@@ -175,7 +193,7 @@ export default function AIDecomposeScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <ScreenHeader title="AI Goal Decomposer" />
+      <ScreenHeader title="AI Goal Decomposer" onBack={handleBackToPrevious} />
 
       <ScrollView contentContainerStyle={{ padding: spacing.lg }}>
         {/* Header Title */}
@@ -457,6 +475,31 @@ export default function AIDecomposeScreen() {
             </View>
           </View>
         )}
+
+        {/* STEP 4: SUCCESS CONFIRMATION */}
+        {step === 'success' && (
+          <View style={styles.centerContainer}>
+            <View style={[styles.successBadgeCircle, { backgroundColor: colors.accent + '20' }]}>
+              <Text style={{ fontSize: 44 }}>✅</Text>
+            </View>
+            <Text style={[styles.loadingTitle, { color: colors.textPrimary, marginTop: spacing.md }]}>
+              Tasks Created Successfully!
+            </Text>
+            <Text style={{ fontSize: typography.fontSize.sm, color: colors.textSecondary, marginTop: spacing.xs, textAlign: 'center' }}>
+              Added {createdCount} daily roadmap tasks to your task list.
+            </Text>
+            <Text style={{ fontSize: typography.fontSize.xs, color: colors.textTertiary, marginTop: spacing.xs, textAlign: 'center' }}>
+              Navigating to your Tasks screen...
+            </Text>
+            <View style={{ marginTop: spacing.lg, width: '100%', maxWidth: 240 }}>
+              <Button
+                title="View Tasks Now"
+                variant="primary"
+                onPress={() => router.replace('/(tabs)/tasks')}
+              />
+            </View>
+          </View>
+        )}
       </ScrollView>
 
       {editingTaskIdx !== null && proposal && (
@@ -541,6 +584,13 @@ const styles = StyleSheet.create({
   centerContainer: {
     paddingVertical: 64,
     alignItems: 'center',
+  },
+  successBadgeCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   loadingTitle: {
     fontSize: typography.fontSize.base,

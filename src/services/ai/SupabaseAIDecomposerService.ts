@@ -527,9 +527,8 @@ REQUIREMENTS:
     }
 
     const dayDates: string[] = [];
-    for (let i = 1; i <= days; i++) {
-      const d = new Date(now.getTime() + i * 24 * 60 * 60 * 1000);
-      d.setHours(23, 59, 59, 0);
+    for (let i = 0; i < days; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i, 23, 59, 59);
       dayDates.push(d.toISOString());
     }
 

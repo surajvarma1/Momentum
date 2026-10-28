@@ -59,6 +59,21 @@ export default function TodayScreen() {
     setRefreshing(false);
   };
 
+  const isDateToday = (dateStr: string | null | undefined): boolean => {
+    if (!dateStr) return false;
+    try {
+      const d = new Date(dateStr);
+      const cur = new Date();
+      return (
+        d.getFullYear() === cur.getFullYear() &&
+        d.getMonth() === cur.getMonth() &&
+        d.getDate() === cur.getDate()
+      );
+    } catch {
+      return false;
+    }
+  };
+
   // Derived task subsets
   const { todayTasks, overdueTasks, completedTodayTasks, nextUpTask, completedCount, totalCount } =
     useMemo(() => {
@@ -68,9 +83,8 @@ export default function TodayScreen() {
 
       tasks.forEach((t) => {
         if (t.status === 'COMPLETED') {
-          const compDate = t.completedAt ? t.completedAt.split('T')[0] : (t.updatedAt ? t.updatedAt.split('T')[0] : '');
-          const isDueToday = t.deadline && t.deadline.startsWith(todayStr);
-          if (compDate === todayStr || isDueToday) {
+          const compDate = t.completedAt || t.updatedAt;
+          if (isDateToday(compDate) || isDateToday(t.deadline)) {
             completedToday.push(t);
           }
           return;
@@ -78,13 +92,7 @@ export default function TodayScreen() {
 
         if (isTaskOverdue(t, now)) {
           overdue.push(t);
-        } else if (
-          t.deadline &&
-          t.deadline.startsWith(todayStr)
-        ) {
-          forToday.push(t);
-        } else if (!t.deadline && t.status !== 'CANCELLED') {
-          // Unscheduled active tasks also considered for today's backlog
+        } else if (isDateToday(t.deadline)) {
           forToday.push(t);
         }
       });

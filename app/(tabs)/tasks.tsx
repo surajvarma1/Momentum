@@ -57,6 +57,21 @@ export default function TasksScreen() {
     setRefreshing(false);
   };
 
+  const isDateToday = (dateStr: string | null | undefined): boolean => {
+    if (!dateStr) return false;
+    try {
+      const d = new Date(dateStr);
+      const cur = new Date();
+      return (
+        d.getFullYear() === cur.getFullYear() &&
+        d.getMonth() === cur.getMonth() &&
+        d.getDate() === cur.getDate()
+      );
+    } catch {
+      return false;
+    }
+  };
+
   const filteredTasks = useMemo(() => {
     return tasks.filter((t) => {
       // 1. Search query filter
@@ -73,15 +88,12 @@ export default function TasksScreen() {
         case 'ALL':
           return true;
         case 'TODAY':
-          return (
-            (t.deadline && t.deadline.startsWith(todayDateStr)) ||
-            (!t.deadline && t.status !== 'COMPLETED' && t.status !== 'CANCELLED')
-          );
+          return isDateToday(t.deadline) && t.status !== 'COMPLETED' && t.status !== 'CANCELLED';
         case 'UPCOMING':
           return (
             t.deadline !== null &&
-            t.deadline > now &&
-            !t.deadline.startsWith(todayDateStr) &&
+            !isDateToday(t.deadline) &&
+            !isTaskOverdue(t, now) &&
             t.status !== 'COMPLETED' &&
             t.status !== 'CANCELLED'
           );

@@ -4,6 +4,7 @@
  */
 
 import React, { useEffect, useState } from 'react';
+import { View, Text, Pressable } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { ThemeProvider } from '../src/presentation/theme/ThemeContext';
@@ -19,6 +20,61 @@ import { NotificationService } from '../src/services/NotificationService';
 import { ServiceContainer } from '../src/services/ServiceContainer';
 import { LoadingState } from '../src/presentation/components/LoadingState';
 import { useUIStore } from '../src/presentation/stores/uiStore';
+
+function GlobalSnackbar() {
+  const { colors } = useTheme();
+  const snackbar = useUIStore((s) => s.snackbar);
+  const hideSnackbar = useUIStore((s) => s.hideSnackbar);
+
+  useEffect(() => {
+    if (snackbar) {
+      const timer = setTimeout(() => {
+        hideSnackbar();
+      }, 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [snackbar, hideSnackbar]);
+
+  if (!snackbar) return null;
+
+  const bg =
+    snackbar.type === 'error'
+      ? colors.error
+      : snackbar.type === 'success'
+      ? '#10b981'
+      : colors.accent;
+
+  return (
+    <View
+      style={{
+        position: 'absolute',
+        bottom: 30,
+        left: 20,
+        right: 20,
+        backgroundColor: bg,
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        borderRadius: 12,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+        elevation: 6,
+        zIndex: 9999,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+      }}
+    >
+      <Text style={{ color: '#fff', fontSize: 14, fontWeight: '600', flex: 1 }}>
+        {snackbar.message}
+      </Text>
+      <Pressable onPress={hideSnackbar} style={{ paddingLeft: 12 }}>
+        <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>✕</Text>
+      </Pressable>
+    </View>
+  );
+}
 
 function RootNavigator() {
   const { colors } = useTheme();
@@ -71,6 +127,7 @@ function RootNavigator() {
           options={{ presentation: 'modal', animation: 'fade' }}
         />
       </Stack>
+      <GlobalSnackbar />
     </>
   );
 }
