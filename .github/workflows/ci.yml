@@ -1,0 +1,53 @@
+name: Momentum CI/CD Quality Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    name: Code Quality, Tests & Security
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: momentum/package-lock.json
+
+      - name: Install Dependencies
+        run: |
+          cd momentum
+          npm ci
+
+      - name: TypeScript Strict Typecheck
+        run: |
+          cd momentum
+          npm run typecheck
+
+      - name: Run Jest Test Suite (Unit, Integration & Security)
+        run: |
+          cd momentum
+          npm test
+
+      - name: Expo Configuration Diagnostics
+        run: |
+          cd momentum
+          npx expo-doctor
+
+      - name: Dependency Vulnerability Audit
+        run: |
+          cd momentum
+          npm audit --audit-level=high
+
+      - name: Validate Supabase SQL Migrations Syntax
+        run: |
+          test -f momentum/supabase/migrations/20261025000001_phase3_schema.sql
+          grep -q "ROW LEVEL SECURITY" momentum/supabase/migrations/20261025000001_phase3_schema.sql
