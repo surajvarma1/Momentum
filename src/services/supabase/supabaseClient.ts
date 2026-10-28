@@ -11,10 +11,16 @@ try {
   // Safely fallback when expo-constants is not loaded
 }
 
-const supabaseUrl =
+const rawSupabaseUrl =
   process.env.EXPO_PUBLIC_SUPABASE_URL ||
   expoConstantsExtra?.supabaseUrl ||
   'https://placeholder-project.supabase.co';
+
+// Sanitize URL by stripping any /rest/v1 suffix or trailing slashes
+const supabaseUrl = rawSupabaseUrl
+  .trim()
+  .replace(/\/rest\/v1\/?$/i, '')
+  .replace(/\/+$/, '');
 
 const supabaseAnonKey =
   process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ||

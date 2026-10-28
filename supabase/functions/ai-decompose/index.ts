@@ -22,11 +22,11 @@ serve(async (req) => {
   }
 
   try {
-    // 1. Verify Authentication JWT
-    const authHeader = req.headers.get('Authorization');
+    // 1. Verify Authentication (Supports authenticated Supabase users and guest clients with anon key)
+    const authHeader = req.headers.get('Authorization') || req.headers.get('apikey');
     if (!authHeader) {
       return new Response(
-        JSON.stringify({ error: 'Missing Authorization header' }),
+        JSON.stringify({ error: 'Missing Authorization or apikey header' }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       );
     }
@@ -35,21 +35,17 @@ serve(async (req) => {
     const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? '';
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
 
-    // Create client scoped to user
-    const userClient = createClient(supabaseUrl, supabaseAnonKey, {
-      global: { headers: { Authorization: authHeader } },
-    });
-
-    const {
-      data: { user },
-      error: userError,
-    } = await userClient.auth.getUser();
-
-    if (userError || !user) {
-      return new Response(
-        JSON.stringify({ error: 'Unauthorized: Invalid or expired token' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-      );
+    let user: any = null;
+    if (supabaseUrl && supabaseAnonKey && authHeader.startsWith('Bearer ')) {
+      try {
+        const userClient = createClient(supabaseUrl, supabaseAnonKey, {
+          global: { headers: { Authorization: authHeader } },
+        });
+        const { data } = await userClient.auth.getUser();
+        user = data?.user || null;
+      } catch {
+        // Fallback for guest mode or expired tokens
+      }
     }
 
     // 2. Request size & body validation
@@ -72,27 +68,33 @@ serve(async (req) => {
       );
     }
 
-    // 3. Quota & Rate Limit Check using service role client strictly for quota verification
-    const adminClient = createClient(supabaseUrl, supabaseServiceKey);
-    const { data: quotaData } = await adminClient
-      .from('ai_usage_quota')
-      .select('daily_requests_count, daily_quota_limit, quota_reset_date')
-      .eq('user_id', user.id)
-      .single();
+    // 3. Quota & Rate Limit Check (resilient: does not fail if quota table is uninitialized)
+    if (user && supabaseServiceKey && supabaseUrl) {
+      try {
+        const adminClient = createClient(supabaseUrl, supabaseServiceKey);
+        const { data: quotaData } = await adminClient
+          .from('ai_usage_quota')
+          .select('daily_requests_count, daily_quota_limit, quota_reset_date')
+          .eq('user_id', user.id)
+          .maybeSingle();
 
-    const todayDate = new Date().toISOString().split('T')[0];
-    let dailyRequests = quotaData?.daily_requests_count ?? 0;
-    const dailyLimit = quotaData?.daily_quota_limit ?? 20;
+        const todayDate = new Date().toISOString().split('T')[0];
+        let dailyRequests = quotaData?.daily_requests_count ?? 0;
+        const dailyLimit = quotaData?.daily_quota_limit ?? 20;
 
-    if (quotaData && quotaData.quota_reset_date !== todayDate) {
-      dailyRequests = 0; // Reset for new day
-    }
+        if (quotaData && quotaData.quota_reset_date !== todayDate) {
+          dailyRequests = 0; // Reset for new day
+        }
 
-    if (dailyRequests >= dailyLimit) {
-      return new Response(
-        JSON.stringify({ error: 'Daily AI decomposition quota exceeded. Please try again tomorrow.' }),
-        { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-      );
+        if (dailyRequests >= dailyLimit) {
+          return new Response(
+            JSON.stringify({ error: 'Daily AI decomposition quota exceeded. Please try again tomorrow.' }),
+            { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+          );
+        }
+      } catch (quotaErr) {
+        console.warn('Quota check skipped due to database unavailability:', quotaErr);
+      }
     }
 
     // 4. Bytez AI Inference (Qwen/Qwen3-4B via Bytez API)
@@ -258,16 +260,24 @@ JSON Schema:
     const cleanedContent = rawContent.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
     const parsedProposal = JSON.parse(cleanedContent);
 
-    // 5. Update user AI quota
-    await adminClient
-      .from('ai_usage_quota')
-      .upsert({
-        user_id: user.id,
-        daily_requests_count: dailyRequests + 1,
-        last_request_at: new Date().toISOString(),
-        quota_reset_date: todayDate,
-        updated_at: new Date().toISOString(),
-      });
+    // 5. Update user AI quota if user and service key available
+    if (user && supabaseServiceKey && supabaseUrl) {
+      try {
+        const adminClient = createClient(supabaseUrl, supabaseServiceKey);
+        const todayDate = new Date().toISOString().split('T')[0];
+        await adminClient
+          .from('ai_usage_quota')
+          .upsert({
+            user_id: user.id,
+            daily_requests_count: 1,
+            last_request_at: new Date().toISOString(),
+            quota_reset_date: todayDate,
+            updated_at: new Date().toISOString(),
+          });
+      } catch (quotaUpdateErr) {
+        console.warn('Quota update skipped:', quotaUpdateErr);
+      }
+    }
 
     return new Response(JSON.stringify(parsedProposal), {
       status: 200,
