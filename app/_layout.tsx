@@ -148,7 +148,9 @@ export default function RootLayout() {
     let mounted = true;
     (async () => {
       try {
+        console.log('[App] Initializing database...');
         const db = await getDatabase();
+        console.log('[App] Database initialized successfully!');
 
         // Check versioned onboarding completion flag from app_settings
         try {

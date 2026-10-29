@@ -45,23 +45,20 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
     try {
       let db: SQLite.SQLiteDatabase;
 
+      console.log(`[Database] Opening database "${DB_NAME}" on platform: ${Platform.OS}`);
       if (Platform.OS === 'web') {
         try {
           db = await SQLite.openDatabaseAsync(DB_NAME);
+          console.log('[Database] openDatabaseAsync resolved on web');
         } catch (err: any) {
-          // If browser OPFS access handle is briefly locked by a previous fast-refresh cycle,
-          // wait 200ms and attempt recovery
-          if (err?.message?.includes('createSyncAccessHandle') || err?.message?.includes('Access Handles')) {
-            console.warn('[Database] OPFS access handle locked. Waiting for lock release...');
-            await new Promise((resolve) => setTimeout(resolve, 200));
-            db = await SQLite.openDatabaseAsync(DB_NAME);
-          } else {
-            throw err;
-          }
+          console.warn('[Database] Falling back to in-memory SQLite on web:', err);
+          db = await SQLite.openDatabaseAsync(':memory:');
+          console.log('[Database] openDatabaseAsync in-memory resolved on web');
         }
       } else {
         db = await SQLite.openDatabaseAsync(DB_NAME);
       }
+      console.log('[Database] Running migrations...');
 
       // Enable WAL mode on native Android/iOS for better concurrent read performance
       if (Platform.OS !== 'web') {

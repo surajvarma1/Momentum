@@ -16,7 +16,7 @@ export function LoadingState({ message = 'Loading...', testID }: LoadingStatePro
   const { colors } = useTheme();
 
   return (
-    <View style={styles.container} testID={testID}>
+    <View style={[styles.container, { backgroundColor: colors.background }]} testID={testID}>
       <ActivityIndicator size="large" color={colors.accent} />
       <Text style={[styles.message, { color: colors.textSecondary }]}>
         {message}
