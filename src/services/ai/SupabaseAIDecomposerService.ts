@@ -113,23 +113,23 @@ REQUIREMENTS:
       return [preference as any];
     }
 
-    const openRouterKey = process.env.EXPO_PUBLIC_OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY;
-    const geminiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
     const nvidiaKey = process.env.EXPO_PUBLIC_NVIDIA_API_KEY || process.env.NVIDIA_API_KEY;
+    const geminiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+    const openRouterKey = process.env.EXPO_PUBLIC_OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY;
     const bytezKey = process.env.EXPO_PUBLIC_BYTEZ_API_KEY || process.env.BYTEZ_API_KEY;
 
     const queue: Array<'openrouter' | 'gemini' | 'nvidia' | 'bytez' | 'supabase'> = [];
 
-    // Prioritize providers that have configured API keys
+    // Prioritize providers that have configured API keys (NVIDIA NIM first as high performance model)
+    if (nvidiaKey) queue.push('nvidia');
     if (geminiKey) queue.push('gemini');
     if (openRouterKey) queue.push('openrouter');
-    if (nvidiaKey) queue.push('nvidia');
     if (bytezKey) queue.push('bytez');
     if (isSupabaseConfigured()) queue.push('supabase');
 
     // Default cascade if none configured specifically
     if (queue.length === 0) {
-      queue.push('gemini', 'openrouter', 'nvidia', 'bytez');
+      queue.push('nvidia', 'gemini', 'openrouter', 'bytez');
     }
 
     return queue;
@@ -308,10 +308,10 @@ REQUIREMENTS:
     const model =
       process.env.EXPO_PUBLIC_NVIDIA_MODEL ||
       process.env.NVIDIA_MODEL ||
-      'nvidia/llama-3.1-nemotron-70b-instruct';
+      'nvidia/nemotron-3.5-super-vl-120b-a12b';
 
     if (!key) {
-      throw new Error('NVIDIA_API_KEY not configured in .env');
+      throw new Error('NVIDIA_API_KEY not configured in .env (ensure EXPO_PUBLIC_NVIDIA_API_KEY is set)');
     }
 
     const response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
@@ -329,6 +329,7 @@ REQUIREMENTS:
         temperature: 0.2,
         max_tokens: 4096,
       }),
+      signal: AbortSignal.timeout(60000),
     });
 
     if (!response.ok) {
@@ -342,8 +343,12 @@ REQUIREMENTS:
     }
 
     const data = await response.json();
-    const rawJson = data?.choices?.[0]?.message?.content || '';
+    const message = data?.choices?.[0]?.message;
+    const rawJson = message?.content || message?.reasoning_content || message?.reasoning || '';
     if (!rawJson) throw new Error('NVIDIA NIM returned empty content');
+
+    // Pre-validate JSON extraction
+    this.extractJson(rawJson);
 
     return { rawJson, providerName: 'NVIDIA NIM', modelName: model };
   }

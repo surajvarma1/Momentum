@@ -48,6 +48,13 @@ export default function AIDecomposeScreen() {
   // Task deadline editing modal
   const [editingTaskIdx, setEditingTaskIdx] = useState<number | null>(null);
 
+  // Guarantee that reviewing requires an active proposal; otherwise remain in input mode
+  React.useEffect(() => {
+    if (step === 'review' && !proposal) {
+      setStep('input');
+    }
+  }, [step, proposal]);
+
   // Natural language timeline detector
   const detectedDays = React.useMemo(() => {
     const text = goalDescription.toLowerCase();
