@@ -60,9 +60,19 @@
       "typedRoutes": true
     },
     "extra": {
+      "router": {
+        "headers": {
+          "Cross-Origin-Embedder-Policy": "credentialless",
+          "Cross-Origin-Opener-Policy": "same-origin"
+        },
+        "asyncRoutes": {
+          "web": true
+        }
+      },
       "eas": {
-        "projectId": "com.momentum.app"
+        "projectId": "48baeef5-faee-4ecb-870c-a5d3786824ce"
       }
-    }
+    },
+    "owner": "surajkanuganti"
   }
 }
