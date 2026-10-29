@@ -57,6 +57,7 @@ Your response must strictly conform to:
 Target Timeline: Exactly ${totalDays} days.
 Daily Focus Duration: ${sessionTime} minutes per session.
 Timezone: ${validatedInput.timezone || 'UTC'}
+Current Reference Date: ${new Date().toISOString().split('T')[0]} (Day 1 starts on ${dayDates[0] || new Date().toISOString()}).
 
 Specialist Guidance:
 ${persona.instructions}
@@ -66,7 +67,8 @@ REQUIREMENTS:
 2. Each daily task MUST contain 3 to 5 practical, specific, actionable subtasks.
 3. Organize tasks into milestones (m-1, m-2, etc.).
 4. Calibrate intensity realistically for a ${sessionTime}-minute daily session.
-5. Strictly return valid raw JSON only.`;
+5. Strictly use current/future ISO-8601 deadlines starting from ${dayDates[0] || new Date().toISOString()}.
+6. Strictly return valid raw JSON only.`;
 
     const selectedProvider = validatedInput.provider || 'auto';
 
@@ -120,16 +122,16 @@ REQUIREMENTS:
 
     const queue: Array<'openrouter' | 'gemini' | 'nvidia' | 'bytez' | 'supabase'> = [];
 
-    // Prioritize providers that have configured API keys (NVIDIA NIM first as high performance model)
+    // Fallback cascade: 1. NVIDIA NIM (default) -> 2. OpenRouter -> 3. Gemini -> 4. Bytez -> 5. Supabase
     if (nvidiaKey) queue.push('nvidia');
-    if (geminiKey) queue.push('gemini');
     if (openRouterKey) queue.push('openrouter');
+    if (geminiKey) queue.push('gemini');
     if (bytezKey) queue.push('bytez');
     if (isSupabaseConfigured()) queue.push('supabase');
 
     // Default cascade if none configured specifically
     if (queue.length === 0) {
-      queue.push('nvidia', 'gemini', 'openrouter', 'bytez');
+      queue.push('nvidia', 'openrouter', 'gemini', 'bytez');
     }
 
     return queue;
@@ -503,11 +505,18 @@ REQUIREMENTS:
   }
 
   private normalizeDeadline(val: any, fallback?: string): string | null {
+    const nowTs = Date.now();
+    const currentYear = new Date().getFullYear();
+
     if (typeof val === 'string' && val.trim().length > 0) {
       const trimmed = val.trim();
       const ts = Date.parse(trimmed);
       if (!isNaN(ts)) {
-        return new Date(ts).toISOString();
+        const d = new Date(ts);
+        // Only accept if date is valid and NOT in the past (e.g. LLM hallucinated 2023 or older)
+        if (d.getFullYear() >= currentYear && ts > nowTs - 86400000) {
+          return d.toISOString();
+        }
       }
     }
     if (fallback) {
@@ -516,7 +525,9 @@ REQUIREMENTS:
         return new Date(fbTs).toISOString();
       }
     }
-    return null;
+    const endOfToday = new Date();
+    endOfToday.setHours(23, 59, 59, 0);
+    return endOfToday.toISOString();
   }
 
   private normalizePriority(val: any): 'LOW' | 'MEDIUM' | 'HIGH' | 'IMPORTANT' {
@@ -549,8 +560,14 @@ REQUIREMENTS:
 
   private ensureSuggestedDeadlines(proposal: any, dayDates: string[]): void {
     if (!Array.isArray(proposal.proposedTasks)) return;
+    const now = new Date();
     proposal.proposedTasks.forEach((task: any, index: number) => {
-      task.suggestedDeadline = this.normalizeDeadline(task.suggestedDeadline, dayDates[index]);
+      let fallback = dayDates[index];
+      if (!fallback) {
+        const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + index, 23, 59, 59);
+        fallback = d.toISOString();
+      }
+      task.suggestedDeadline = this.normalizeDeadline(task.suggestedDeadline, fallback);
     });
   }
 

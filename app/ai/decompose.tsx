@@ -19,11 +19,189 @@ import { ScreenHeader } from '../../src/presentation/components/ScreenHeader';
 import { DatePickerField, DatePickerModal } from '../../src/presentation/components/DatePickerModal';
 import { ServiceContainer } from '../../src/services/ServiceContainer';
 import { useUIStore } from '../../src/presentation/stores/uiStore';
-import {
-  GoalDecompositionProposal,
-} from '../../src/domain/ai/AIDecomposerTypes';
+import { GoalDecompositionProposal } from '../../src/domain/ai/AIDecomposerTypes';
 
-type ProviderChoice = 'auto' | 'openrouter' | 'gemini' | 'nvidia' | 'bytez';
+interface DurationSelectorProps {
+  hours: number;
+  minutes: number;
+  onChange: (hours: number, minutes: number) => void;
+}
+
+function DurationSelector({ hours, minutes, onChange }: DurationSelectorProps) {
+  const { colors } = useTheme();
+
+  const presets = [
+    { label: '00:25', sub: '25m', h: 0, m: 25 },
+    { label: '00:45', sub: '45m', h: 0, m: 45 },
+    { label: '01:00', sub: '1h', h: 1, m: 0 },
+    { label: '01:30', sub: '1.5h', h: 1, m: 30 },
+    { label: '02:00', sub: '2h', h: 2, m: 0 },
+  ];
+
+  const adjustHours = (delta: number) => {
+    const nextH = Math.min(8, Math.max(0, hours + delta));
+    let nextM = minutes;
+    if (nextH === 0 && nextM < 15) nextM = 15;
+    if (nextH === 8) nextM = 0;
+    onChange(nextH, nextM);
+  };
+
+  const adjustMinutes = (delta: number) => {
+    let nextM = minutes + delta;
+    let nextH = hours;
+    if (nextM >= 60) {
+      if (nextH < 8) {
+        nextH += 1;
+        nextM = 0;
+      } else {
+        nextM = 55;
+      }
+    } else if (nextM < 0) {
+      if (nextH > 0) {
+        nextH -= 1;
+        nextM = 55;
+      } else {
+        nextM = 15;
+      }
+    }
+    if (nextH === 0 && nextM < 15) nextM = 15;
+    if (nextH === 8) nextM = 0;
+    onChange(nextH, nextM);
+  };
+
+  const totalMinutes = hours * 60 + minutes;
+
+  return (
+    <View style={styles.durationSection}>
+      <View style={styles.durationHeaderRow}>
+        <Text style={[styles.fieldLabel, { color: colors.textPrimary }]}>
+          Preferred Daily Focus Duration
+        </Text>
+        <Text style={{ fontSize: typography.fontSize.xs, color: colors.accent, fontWeight: '700' }}>
+          ⏱️ {totalMinutes} min/day
+        </Text>
+      </View>
+
+      <Card style={[styles.durationCard, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+        <View style={styles.digitalDisplay}>
+          {/* Hours Stepper */}
+          <View style={styles.unitBlock}>
+            <Text style={[styles.unitLabel, { color: colors.textSecondary }]}>HOURS</Text>
+            <View style={styles.stepperRow}>
+              <Pressable
+                onPress={() => adjustHours(-1)}
+                disabled={hours === 0 && minutes <= 15}
+                style={({ pressed }) => [
+                  styles.stepBtn,
+                  { backgroundColor: colors.background, borderColor: colors.border },
+                  (hours === 0 && minutes <= 15) && { opacity: 0.4 },
+                  pressed && { opacity: 0.7 },
+                ]}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Decrease hours"
+              >
+                <Text style={[styles.stepBtnText, { color: colors.textPrimary }]}>−</Text>
+              </Pressable>
+              <Text style={[styles.timeDigit, { color: colors.textPrimary }]}>
+                {String(hours).padStart(2, '0')}
+              </Text>
+              <Pressable
+                onPress={() => adjustHours(1)}
+                disabled={hours >= 8}
+                style={({ pressed }) => [
+                  styles.stepBtn,
+                  { backgroundColor: colors.background, borderColor: colors.border },
+                  hours >= 8 && { opacity: 0.4 },
+                  pressed && { opacity: 0.7 },
+                ]}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Increase hours"
+              >
+                <Text style={[styles.stepBtnText, { color: colors.textPrimary }]}>+</Text>
+              </Pressable>
+            </View>
+          </View>
+
+          <Text style={[styles.timeColon, { color: colors.accent }]}>:</Text>
+
+          {/* Minutes Stepper */}
+          <View style={styles.unitBlock}>
+            <Text style={[styles.unitLabel, { color: colors.textSecondary }]}>MINUTES</Text>
+            <View style={styles.stepperRow}>
+              <Pressable
+                onPress={() => adjustMinutes(-5)}
+                disabled={hours === 0 && minutes <= 15}
+                style={({ pressed }) => [
+                  styles.stepBtn,
+                  { backgroundColor: colors.background, borderColor: colors.border },
+                  (hours === 0 && minutes <= 15) && { opacity: 0.4 },
+                  pressed && { opacity: 0.7 },
+                ]}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Decrease minutes"
+              >
+                <Text style={[styles.stepBtnText, { color: colors.textPrimary }]}>−</Text>
+              </Pressable>
+              <Text style={[styles.timeDigit, { color: colors.textPrimary }]}>
+                {String(minutes).padStart(2, '0')}
+              </Text>
+              <Pressable
+                onPress={() => adjustMinutes(5)}
+                disabled={hours >= 8}
+                style={({ pressed }) => [
+                  styles.stepBtn,
+                  { backgroundColor: colors.background, borderColor: colors.border },
+                  hours >= 8 && { opacity: 0.4 },
+                  pressed && { opacity: 0.7 },
+                ]}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Increase minutes"
+              >
+                <Text style={[styles.stepBtnText, { color: colors.textPrimary }]}>+</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+
+        {/* Quick Presets Row */}
+        <View style={styles.presetsRow}>
+          {presets.map((p) => {
+            const isSelected = hours === p.h && minutes === p.m;
+            return (
+              <Pressable
+                key={p.label}
+                onPress={() => onChange(p.h, p.m)}
+                style={[
+                  styles.presetChip,
+                  {
+                    borderColor: isSelected ? colors.accent : colors.border,
+                    backgroundColor: isSelected ? colors.accent + '25' : colors.background,
+                  },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.presetChipText,
+                    {
+                      color: isSelected ? colors.accent : colors.textSecondary,
+                      fontWeight: isSelected ? '700' : '500',
+                    },
+                  ]}
+                >
+                  {p.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      </Card>
+    </View>
+  );
+}
 
 export default function AIDecomposeScreen() {
   const { colors } = useTheme();
@@ -35,8 +213,8 @@ export default function AIDecomposeScreen() {
   // Input fields
   const [goalDescription, setGoalDescription] = useState('');
   const [deadline, setDeadline] = useState('');
-  const [sessionDuration, setSessionDuration] = useState('25');
-  const [selectedProvider, setSelectedProvider] = useState<ProviderChoice>('auto');
+  const [durationHours, setDurationHours] = useState(0);
+  const [durationMinutes, setDurationMinutes] = useState(45);
   const [screenLoadedAt] = useState(() => Date.now());
 
   // Proposal result & selection
@@ -48,7 +226,7 @@ export default function AIDecomposeScreen() {
   // Task deadline editing modal
   const [editingTaskIdx, setEditingTaskIdx] = useState<number | null>(null);
 
-  // Guarantee that reviewing requires an active proposal; otherwise remain in input mode
+  // Guarantee reviewing requires an active proposal; otherwise fallback to input
   React.useEffect(() => {
     if (step === 'review' && !proposal) {
       setStep('input');
@@ -79,7 +257,7 @@ export default function AIDecomposeScreen() {
 
   const handleGenerate = async () => {
     if (goalDescription.trim().length < 5) {
-      Alert.alert('Invalid Goal', 'Please enter a goal description with at least 5 characters.');
+      setError('Please enter a goal description with at least 5 characters.');
       return;
     }
 
@@ -88,7 +266,7 @@ export default function AIDecomposeScreen() {
       setStep('loading');
 
       const container = ServiceContainer.getInstance();
-      const parsedDuration = parseInt(sessionDuration, 10) || 25;
+      const totalMinutes = durationHours * 60 + durationMinutes;
 
       let effectiveDeadline = deadline.trim();
       if (!effectiveDeadline && detectedDays) {
@@ -101,19 +279,19 @@ export default function AIDecomposeScreen() {
       const result = await container.decomposeGoal.execute({
         goalDescription: goalDescription.trim(),
         deadline: effectiveDeadline || undefined,
-        preferredSessionMinutes: Math.min(240, Math.max(15, parsedDuration)),
+        preferredSessionMinutes: Math.min(480, Math.max(15, totalMinutes)),
         includeExistingCommitments: false,
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
-        provider: selectedProvider,
+        provider: 'auto',
       });
 
       setProposal(result);
-      // Select all proposed tasks by default
       const allIndices = new Set(result.proposedTasks.map((_, i) => i));
       setSelectedTaskIndices(allIndices);
       setStep('review');
     } catch (err: any) {
-      setError(err.message || 'Failed to decompose goal. Please check your AI API key in .env or switch provider.');
+      console.error('[AIDecompose] Generation error:', err);
+      setError(err.message || 'Failed to decompose goal. Please try again.');
       setStep('input');
     }
   };
@@ -148,25 +326,26 @@ export default function AIDecomposeScreen() {
     );
 
     if (approvedTasks.length === 0) {
-      Alert.alert('No Tasks Selected', 'Please select at least one task to create, or discard the proposal.');
+      setError('Please select at least one task to create.');
       return;
     }
 
     try {
       setIsApplying(true);
+      setError(null);
       const container = ServiceContainer.getInstance();
       await container.applyGoalProposal.execute(approvedTasks);
+
+      // Reactive update for tasks list and today's schedule
       useUIStore.getState().incrementTasksRevision();
       useUIStore.getState().setActiveFilter('all');
+
       setCreatedCount(approvedTasks.length);
-      setProposal(null);
       setStep('success');
-      useUIStore.getState().showSnackbar(`Successfully added ${approvedTasks.length} tasks!`, 'success');
-      setTimeout(() => {
-        router.replace('/(tabs)/tasks');
-      }, 1400);
+      useUIStore.getState().showSnackbar(`Successfully created ${approvedTasks.length} tasks!`, 'success');
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Failed to save generated tasks.');
+      console.error('[AIDecompose] Task creation error:', err);
+      setError(err.message || 'Failed to create tasks. Please try again.');
     } finally {
       setIsApplying(false);
     }
@@ -182,69 +361,27 @@ export default function AIDecomposeScreen() {
           text: 'Discard',
           style: 'destructive',
           onPress: () => {
-            if (router.canGoBack()) router.back();
-            else router.replace('/(tabs)/tasks');
+            setProposal(null);
+            setStep('input');
           },
         },
       ],
     );
   };
 
-  const PROVIDER_OPTIONS: { id: ProviderChoice; label: string; badge: string }[] = [
-    { id: 'auto', label: 'Auto', badge: 'Smart' },
-    { id: 'openrouter', label: 'OpenRouter', badge: 'Free' },
-    { id: 'gemini', label: 'Gemini', badge: 'Fast' },
-    { id: 'nvidia', label: 'NVIDIA NIM', badge: 'Pro' },
-    { id: 'bytez', label: 'Bytez', badge: 'API' },
-  ];
-
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <ScreenHeader title="AI Goal Decomposer" onBack={handleBackToPrevious} />
 
-      <ScrollView contentContainerStyle={{ padding: spacing.lg }}>
+      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 60 }}>
         {/* Header Title */}
-        <View style={{ marginBottom: spacing.md }}>
+        <View style={{ marginBottom: spacing.lg }}>
           <View style={styles.titleRow}>
             <Text style={[styles.heading, { color: colors.textPrimary }]}>Decompose Goals into Action</Text>
           </View>
           <Text style={{ fontSize: typography.fontSize.sm, color: colors.textSecondary, marginTop: spacing.xs }}>
             Formulate progressive milestones and day-by-day execution tasks using advanced AI.
           </Text>
-        </View>
-
-        {/* Provider Selector Chips */}
-        <View style={{ marginBottom: spacing.md }}>
-          <Text style={{ fontSize: typography.fontSize.xs, fontWeight: '700', color: colors.textSecondary, marginBottom: 8, letterSpacing: 0.5 }}>
-            AI ENGINE PROVIDER
-          </Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.providerScroll}>
-            {PROVIDER_OPTIONS.map((p) => {
-              const active = selectedProvider === p.id;
-              return (
-                <Pressable
-                  key={p.id}
-                  onPress={() => setSelectedProvider(p.id)}
-                  style={[
-                    styles.providerChip,
-                    {
-                      borderColor: active ? colors.accent : colors.border,
-                      backgroundColor: active ? colors.surface : colors.background,
-                    },
-                  ]}
-                >
-                  <Text style={[styles.providerLabel, { color: active ? colors.accent : colors.textPrimary }]}>
-                    {p.label}
-                  </Text>
-                  <View style={[styles.providerBadge, { backgroundColor: active ? colors.accent + '25' : colors.surface }]}>
-                    <Text style={{ fontSize: 9, fontWeight: '700', color: active ? colors.accent : colors.textTertiary }}>
-                      {p.badge}
-                    </Text>
-                  </View>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
         </View>
 
         {error && (
@@ -258,7 +395,7 @@ export default function AIDecomposeScreen() {
           <View style={{ gap: spacing.md }}>
             <FormField
               label="Goal Description"
-              placeholder="e.g. Build my body in home in 30 days, or develop a mobile app in 14 days"
+              placeholder="e.g. Build my body at home in 30 days, or learn Angular in 10 days"
               value={goalDescription}
               onChangeText={setGoalDescription}
               multiline
@@ -289,12 +426,14 @@ export default function AIDecomposeScreen() {
               helperText="Optional target date to calibrate daily roadmap"
             />
 
-            <FormField
-              label="Preferred Focus Duration (Minutes)"
-              placeholder="25"
-              value={sessionDuration}
-              onChangeText={setSessionDuration}
-              keyboardType="number-pad"
+            {/* HH:MM Duration Selector */}
+            <DurationSelector
+              hours={durationHours}
+              minutes={durationMinutes}
+              onChange={(h, m) => {
+                setDurationHours(h);
+                setDurationMinutes(m);
+              }}
             />
 
             <View style={{ marginTop: spacing.md }}>
@@ -329,13 +468,11 @@ export default function AIDecomposeScreen() {
                 <Text style={{ fontSize: typography.fontSize.xs, color: colors.textSecondary, fontWeight: '700' }}>
                   PLAN SUMMARY
                 </Text>
-                {proposal.providerUsed && (
-                  <Badge
-                    label={proposal.providerUsed}
-                    color={{ bg: colors.surface, text: colors.accent }}
-                    size="sm"
-                  />
-                )}
+                <Badge
+                  label="AI Execution Plan"
+                  color={{ bg: colors.surface, text: colors.accent }}
+                  size="sm"
+                />
               </View>
               <Text style={{ fontSize: typography.fontSize.sm, color: colors.textPrimary, marginTop: 4, fontWeight: '600' }}>
                 {proposal.goalSummary}
@@ -405,29 +542,21 @@ export default function AIDecomposeScreen() {
                     >
                       <View style={styles.taskCardHeader}>
                         <View style={[styles.checkbox, isSelected && { backgroundColor: colors.accent, borderColor: colors.accent }]}>
-                          {isSelected && <Text style={{ color: '#fff', fontSize: 12, fontWeight: 'bold' }}>✓</Text>}
+                          {isSelected && <Text style={styles.checkmark}>✓</Text>}
                         </View>
-                        <Text
-                          style={[
-                            styles.taskTitle,
-                            {
-                              flex: 1,
-                              marginLeft: spacing.sm,
-                              color: isSelected ? colors.textPrimary : colors.textSecondary,
-                            },
-                          ]}
-                        >
-                          {t.title}
-                        </Text>
+                        <View style={{ flex: 1, marginLeft: spacing.sm }}>
+                          <Text style={[styles.taskTitle, { color: colors.textPrimary }]}>
+                            {t.title}
+                          </Text>
+                          {t.description ? (
+                            <Text style={[styles.taskDesc, { color: colors.textSecondary }]}>
+                              {t.description}
+                            </Text>
+                          ) : null}
+                        </View>
                       </View>
 
-                      {t.description && (
-                        <Text style={{ fontSize: typography.fontSize.xs, color: colors.textSecondary, marginTop: 4, marginLeft: 28 }}>
-                          {t.description}
-                        </Text>
-                      )}
-
-                      <View style={[styles.badgeRow, { marginLeft: 28, marginTop: 8 }]}>
+                      <View style={styles.metaRow}>
                         <Badge label={t.priority} />
                         <Badge label={`${t.estimatedDurationMinutes}m`} />
                         {t.suggestedDeadline ? (
@@ -487,21 +616,31 @@ export default function AIDecomposeScreen() {
         {step === 'success' && (
           <View style={styles.centerContainer}>
             <View style={[styles.successBadgeCircle, { backgroundColor: colors.accent + '20' }]}>
-              <Text style={{ fontSize: 44 }}>✅</Text>
+              <Text style={{ fontSize: 44 }}>🎉</Text>
             </View>
             <Text style={[styles.loadingTitle, { color: colors.textPrimary, marginTop: spacing.md }]}>
               Tasks Created Successfully!
             </Text>
             <Text style={{ fontSize: typography.fontSize.sm, color: colors.textSecondary, marginTop: spacing.xs, textAlign: 'center' }}>
-              Added {createdCount} daily roadmap tasks to your task list.
+              Added {createdCount} daily roadmap tasks to your workspace.
             </Text>
-            <Text style={{ fontSize: typography.fontSize.xs, color: colors.textTertiary, marginTop: spacing.xs, textAlign: 'center' }}>
-              Navigating to your Tasks screen...
-            </Text>
-            <View style={{ marginTop: spacing.lg, width: '100%', maxWidth: 240 }}>
+            <View style={[styles.infoBanner, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+              <Text style={{ fontSize: typography.fontSize.xs, color: colors.accent, fontWeight: '600', textAlign: 'center' }}>
+                ⭐ Day 1 task is ready on your Today screen!
+              </Text>
+              <Text style={{ fontSize: typography.fontSize.xs, color: colors.textSecondary, marginTop: 4, textAlign: 'center' }}>
+                All sequential deliverables and subtasks are available in Tasks.
+              </Text>
+            </View>
+            <View style={{ marginTop: spacing.lg, width: '100%', maxWidth: 300, gap: spacing.sm }}>
               <Button
-                title="View Tasks Now"
+                title="View Today's Tasks"
                 variant="primary"
+                onPress={() => router.replace('/(tabs)/today')}
+              />
+              <Button
+                title="View All Tasks"
+                variant="secondary"
                 onPress={() => router.replace('/(tabs)/tasks')}
               />
             </View>
@@ -537,44 +676,117 @@ const styles = StyleSheet.create({
   titleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
   },
   heading: {
     fontSize: typography.fontSize.xl,
     fontWeight: '700',
   },
-  providerScroll: {
-    gap: 8,
-    paddingVertical: 2,
+  errorCard: {
+    padding: spacing.md,
+    borderRadius: radii.md,
   },
-  providerChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
+  detectedPill: {
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
     borderRadius: radii.full,
-    borderWidth: 1.5,
-    gap: 6,
+    borderWidth: 1,
   },
-  providerLabel: {
-    fontSize: typography.fontSize.xs,
+  durationSection: {
+    gap: spacing.xs,
+  },
+  durationHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  fieldLabel: {
+    fontSize: typography.fontSize.sm,
     fontWeight: '600',
   },
-  providerBadge: {
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderRadius: radii.sm,
+  durationCard: {
+    padding: spacing.md,
+    borderRadius: radii.lg,
+  },
+  digitalDisplay: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  unitBlock: {
+    alignItems: 'center',
+  },
+  unitLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 1,
+    marginBottom: 6,
+  },
+  stepperRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  stepBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: radii.md,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepBtnText: {
+    fontSize: 20,
+    fontWeight: '600',
+    lineHeight: 22,
+  },
+  timeDigit: {
+    fontSize: 28,
+    fontWeight: '800',
+    fontVariant: ['tabular-nums'],
+    minWidth: 40,
+    textAlign: 'center',
+  },
+  timeColon: {
+    fontSize: 28,
+    fontWeight: '800',
+    marginTop: 16,
+  },
+  presetsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 6,
+    marginTop: spacing.md,
+    paddingTop: spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(255,255,255,0.08)',
+  },
+  presetChip: {
+    flex: 1,
+    paddingVertical: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radii.md,
+    borderWidth: 1,
+  },
+  presetChipText: {
+    fontSize: typography.fontSize.xs,
+  },
+  centerContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing['2xl'],
+  },
+  loadingTitle: {
+    fontSize: typography.fontSize.base,
+    fontWeight: '700',
   },
   planHeaderRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-  },
-  detectedPill: {
-    paddingVertical: spacing.xs + 2,
-    paddingHorizontal: spacing.md,
-    borderRadius: radii.md,
-    borderWidth: 1,
   },
   tasksHeaderRow: {
     flexDirection: 'row',
@@ -588,9 +800,43 @@ const styles = StyleSheet.create({
     borderRadius: radii.md,
     borderWidth: 1,
   },
-  centerContainer: {
-    paddingVertical: 64,
+  taskCard: {
+    borderWidth: 1,
+    borderRadius: radii.md,
+  },
+  taskCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: radii.sm,
+    borderWidth: 1.5,
+    borderColor: '#666',
     alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 2,
+  },
+  checkmark: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  taskTitle: {
+    fontSize: typography.fontSize.sm,
+    fontWeight: '600',
+  },
+  taskDesc: {
+    fontSize: typography.fontSize.xs,
+    marginTop: 2,
+  },
+  metaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+    marginTop: spacing.sm,
+    paddingTop: spacing.xs,
   },
   successBadgeCircle: {
     width: 80,
@@ -599,38 +845,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  loadingTitle: {
-    fontSize: typography.fontSize.base,
-    fontWeight: '600',
-  },
-  taskCard: {
-    borderWidth: 1.5,
-    borderRadius: radii.md,
-  },
-  taskCardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  taskTitle: {
-    fontSize: typography.fontSize.sm,
-    fontWeight: '600',
-  },
-  checkbox: {
-    width: 20,
-    height: 20,
-    borderRadius: radii.sm,
-    borderWidth: 1.5,
-    borderColor: '#777',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  badgeRow: {
-    flexDirection: 'row',
-    gap: 6,
-  },
-  errorCard: {
-    padding: 12,
+  infoBanner: {
+    marginTop: spacing.md,
+    padding: spacing.md,
     borderRadius: radii.md,
     borderWidth: 1,
+    width: '100%',
+    maxWidth: 320,
   },
 });
