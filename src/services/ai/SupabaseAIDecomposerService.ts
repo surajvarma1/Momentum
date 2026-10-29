@@ -121,15 +121,15 @@ REQUIREMENTS:
     const queue: Array<'openrouter' | 'gemini' | 'nvidia' | 'bytez' | 'supabase'> = [];
 
     // Prioritize providers that have configured API keys
-    if (openRouterKey) queue.push('openrouter');
     if (geminiKey) queue.push('gemini');
+    if (openRouterKey) queue.push('openrouter');
     if (nvidiaKey) queue.push('nvidia');
-    if (isSupabaseConfigured()) queue.push('supabase');
     if (bytezKey) queue.push('bytez');
+    if (isSupabaseConfigured()) queue.push('supabase');
 
     // Default cascade if none configured specifically
     if (queue.length === 0) {
-      queue.push('openrouter', 'gemini', 'nvidia', 'bytez');
+      queue.push('gemini', 'openrouter', 'nvidia', 'bytez');
     }
 
     return queue;
@@ -138,49 +138,90 @@ REQUIREMENTS:
   // 1. OPENROUTER API
   async callOpenRouter(systemPrompt: string, userPrompt: string): Promise<AIProviderResult> {
     const key = process.env.EXPO_PUBLIC_OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY;
-    const model =
+    const configuredModel =
       process.env.EXPO_PUBLIC_OPENROUTER_MODEL ||
       process.env.OPENROUTER_MODEL ||
-      'google/gemini-2.0-flash-exp:free';
+      'cohere/north-mini-code:free';
 
     if (!key) {
       throw new Error('OPENROUTER_API_KEY not configured in .env');
     }
 
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${key}`,
-        'HTTP-Referer': 'https://momentum.app',
-        'X-Title': 'Momentum Todo App',
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt },
-        ],
-        temperature: 0.2,
-        max_tokens: 4096,
-      }),
-    });
+    const candidateModels = [
+      configuredModel,
+      'cohere/north-mini-code:free',
+      'google/gemma-4-31b-it:free',
+      'google/gemma-4-26b-a4b-it:free',
+      'nvidia/nemotron-3.5-super-vl:free',
+      'liquid/lfm-2.5-2.6b:free',
+      'recursive/flint-v1.0:free',
+    ];
+    const modelsToTry = [...new Set(candidateModels.filter(Boolean))];
 
-    if (!response.ok) {
-      const errText = await response.text();
-      let msg = errText;
+    let lastError = '';
+
+    for (const currentModel of modelsToTry) {
       try {
-        const errObj = JSON.parse(errText);
-        if (errObj.error?.message) msg = errObj.error.message;
-      } catch {}
-      throw new Error(`OpenRouter (${response.status}): ${msg}`);
+        const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${key}`,
+            'HTTP-Referer': 'https://momentum.app',
+            'X-Title': 'Momentum Todo App',
+          },
+          body: JSON.stringify({
+            model: currentModel,
+            messages: [
+              { role: 'system', content: `${systemPrompt}\nStrictly output valid raw JSON only, no markdown code blocks, no conversation.` },
+              { role: 'user', content: userPrompt },
+            ],
+            temperature: 0.2,
+            max_tokens: 4096,
+          }),
+        });
+
+        if (!response.ok) {
+          const errText = await response.text();
+          let msg = errText;
+          try {
+            const errObj = JSON.parse(errText);
+            if (errObj.error?.message) msg = errObj.error.message;
+          } catch {}
+          lastError = `OpenRouter (${response.status}) on ${currentModel}: ${msg}`;
+          console.warn(`[OpenRouter] Model ${currentModel} returned ${response.status}: ${msg}. Trying next candidate model...`);
+          continue;
+        }
+
+        const data = await response.json();
+        const choice = data?.choices?.[0];
+        let rawJson = choice?.message?.content || '';
+        if (!rawJson.trim()) {
+          rawJson = choice?.message?.reasoning || choice?.message?.reasoning_content || '';
+        }
+
+        if (!rawJson.trim()) {
+          lastError = `OpenRouter (${currentModel}): Empty message content`;
+          console.warn(`[OpenRouter] Model ${currentModel} returned empty content. Trying next candidate model...`);
+          continue;
+        }
+
+        // Validate JSON can be parsed
+        try {
+          this.extractJson(rawJson);
+          return { rawJson, providerName: 'OpenRouter', modelName: currentModel };
+        } catch (parseErr: any) {
+          lastError = `OpenRouter (${currentModel}): Failed to parse JSON: ${parseErr.message}`;
+          console.warn(`[OpenRouter] Model ${currentModel} output invalid JSON. Trying next candidate model...`);
+          continue;
+        }
+      } catch (err: any) {
+        lastError = `OpenRouter (${currentModel}): ${err.message}`;
+        console.warn(`[OpenRouter] Model ${currentModel} network error: ${err.message}. Trying next candidate model...`);
+      }
     }
 
-    const data = await response.json();
-    const rawJson = data?.choices?.[0]?.message?.content || '';
-    if (!rawJson) throw new Error('OpenRouter returned empty message content');
-
-    return { rawJson, providerName: 'OpenRouter', modelName: model };
+    throw new Error(lastError || 'OpenRouter all candidate free models failed');
   }
 
   // 2. GOOGLE GEMINI API
@@ -189,15 +230,22 @@ REQUIREMENTS:
     const configuredModel =
       process.env.EXPO_PUBLIC_GEMINI_MODEL ||
       process.env.GEMINI_MODEL ||
-      'gemini-1.5-flash';
+      'gemini-flash-lite-latest';
 
     if (!key) {
       throw new Error('GEMINI_API_KEY not configured in .env');
     }
 
-    const modelsToTry = [configuredModel];
-    if (!modelsToTry.includes('gemini-1.5-flash')) modelsToTry.push('gemini-1.5-flash');
-    if (!modelsToTry.includes('gemini-2.0-flash-exp')) modelsToTry.push('gemini-2.0-flash-exp');
+    const candidateModels = [
+      configuredModel,
+      'gemini-flash-lite-latest',
+      'gemini-3.5-flash',
+      'gemma-4-26b-a4b-it',
+      'gemma-4-31b-it',
+      'gemini-flash-latest',
+      'gemini-3.8-flash',
+    ];
+    const modelsToTry = [...new Set(candidateModels.filter(Boolean))];
 
     let lastError = '';
     for (const currentModel of modelsToTry) {
@@ -231,16 +279,23 @@ REQUIREMENTS:
             if (errObj.error?.message) msg = errObj.error.message;
           } catch {}
           lastError = `Gemini (${response.status}) on ${currentModel}: ${msg}`;
+          console.warn(`[Gemini] Model ${currentModel} returned ${response.status}: ${msg}. Trying next candidate model...`);
           continue;
         }
 
         const data = await response.json();
         const rawJson = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
         if (rawJson) {
-          return { rawJson, providerName: 'Google Gemini', modelName: currentModel };
+          try {
+            this.extractJson(rawJson);
+            return { rawJson, providerName: 'Google Gemini', modelName: currentModel };
+          } catch (parseErr: any) {
+            lastError = `Gemini (${currentModel}): Failed to parse JSON: ${parseErr.message}`;
+            continue;
+          }
         }
       } catch (e: any) {
-        lastError = e.message;
+        lastError = `Gemini (${currentModel}): ${e.message}`;
       }
     }
 
