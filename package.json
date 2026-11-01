@@ -58,7 +58,9 @@
         "expo-linking",
         "expo-notifications",
         "expo-router",
-        "expo-splash-screen"
+        "expo-splash-screen",
+        "expo-sqlite",
+        "react-native-screens"
       ]
     }
   },
