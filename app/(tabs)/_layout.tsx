@@ -3,8 +3,9 @@
  */
 
 import React from 'react';
-import { View, Text, Pressable, StyleSheet } from 'react-native';
+import { View, Text, Pressable, StyleSheet, Platform } from 'react-native';
 import { Tabs, router, Redirect } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../../src/presentation/theme/useTheme';
 import { spacing, radii, shadows, typography } from '../../src/presentation/theme/tokens';
 import { useUIStore } from '../../src/presentation/stores/uiStore';
@@ -20,11 +21,17 @@ function TabIcon({ emoji, focused }: { emoji: string; focused: boolean; color?: 
 
 export default function TabLayout() {
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const onboardingComplete = useUIStore((s) => s.onboardingComplete);
 
   if (!onboardingComplete) {
     return <Redirect href="/onboarding" />;
   }
+
+  const bottomInset = insets.bottom;
+  const tabHeight = 60 + bottomInset;
+  const tabPaddingBottom = bottomInset > 0 ? bottomInset : 6;
+  const fabBottom = 72 + bottomInset;
 
   return (
     <View style={styles.wrapper}>
@@ -38,8 +45,9 @@ export default function TabLayout() {
           tabBarStyle: {
             backgroundColor: colors.tabBar,
             borderTopColor: colors.tabBarBorder,
-            height: 60,
-            paddingBottom: 6,
+            height: tabHeight,
+            paddingBottom: tabPaddingBottom,
+            paddingTop: 6,
           },
           tabBarLabelStyle: {
             fontSize: typography.fontSize.xs,
@@ -112,6 +120,7 @@ export default function TabLayout() {
           styles.fab,
           {
             backgroundColor: colors.accent,
+            bottom: fabBottom,
             ...shadows.lg,
           },
           pressed && { opacity: 0.85, transform: [{ scale: 0.95 }] },

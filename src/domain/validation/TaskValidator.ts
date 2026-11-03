@@ -2,11 +2,21 @@ import { z } from 'zod';
 import { Task, CreateTaskInput, UpdateTaskInput } from '../entities/Task';
 import { canTransition, TaskStatus } from '../value-objects/TaskStatus';
 import { RecurrenceRuleSchema } from '../value-objects/RecurrenceRule';
+import { isDeadlineInPast } from '../../utils/dateUtils';
 
 const TrimmedNonEmpty = z
   .string()
   .transform((s) => s.trim())
   .pipe(z.string().min(1, 'Must not be blank'));
+
+const DeadlineSchema = z
+  .string()
+  .refine(
+    (val) => /^\d{4}-\d{2}-\d{2}$/.test(val) || !isNaN(Date.parse(val)),
+    { message: 'Deadline must be a valid date' },
+  )
+  .nullable()
+  .optional();
 
 const CreateTaskInputSchema = z.object({
   title: TrimmedNonEmpty.pipe(
@@ -26,7 +36,7 @@ const CreateTaskInputSchema = z.object({
     .max(1440, 'Estimated duration must be at most 1440 minutes (24 hours)')
     .nullable()
     .optional(),
-  deadline: z.string().datetime({ message: 'Deadline must be a valid ISO 8601 date' }).nullable().optional(),
+  deadline: DeadlineSchema,
   deadlineTimezone: z.string().min(1).nullable().optional(),
   tags: z
     .array(
@@ -70,7 +80,7 @@ const UpdateTaskInputSchema = z.object({
     .max(1440, 'Estimated duration must be at most 1440 minutes (24 hours)')
     .nullable()
     .optional(),
-  deadline: z.string().datetime({ message: 'Deadline must be a valid ISO 8601 date' }).nullable().optional(),
+  deadline: DeadlineSchema,
   deadlineTimezone: z.string().min(1).nullable().optional(),
   tags: z
     .array(
@@ -107,8 +117,8 @@ export function validateCreateTaskInput(
   const errors: string[] = [];
   const data = result.data;
 
-  // Deadline must be in the future for new tasks
-  if (data.deadline && data.deadline <= now) {
+  // Deadline must be today or in the future for new tasks
+  if (data.deadline && isDeadlineInPast(data.deadline, now)) {
     errors.push('Deadline must be in the future');
   }
 
@@ -150,8 +160,8 @@ export function validateUpdateTaskInput(
   const errors: string[] = [];
   const data = result.data;
 
-  // If setting a new deadline, it must be in the future
-  if (data.deadline !== undefined && data.deadline !== null && data.deadline <= now) {
+  // If setting a new deadline, it must be today or in the future
+  if (data.deadline !== undefined && data.deadline !== null && isDeadlineInPast(data.deadline, now)) {
     errors.push('Deadline must be in the future');
   }
 

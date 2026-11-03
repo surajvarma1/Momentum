@@ -72,23 +72,24 @@ REQUIREMENTS:
 
     const selectedProvider = validatedInput.provider || 'auto';
 
-    // Provider execution list based on user preference or automatic failover
+    // Primary: Server-side Edge Function (preserves secrets on server).
+    // Fallback: Local dev keys if specifically configured in local environment.
     const providerQueue = this.resolveProviderQueue(selectedProvider);
     const errorsEncountered: string[] = [];
 
     for (const provider of providerQueue) {
       try {
         let result: AIProviderResult | null = null;
-        if (provider === 'openrouter') {
+        if (provider === 'supabase') {
+          result = await this.callSupabaseEdge(validatedInput);
+        } else if (provider === 'nvidia') {
+          result = await this.callNvidiaNIM(systemPrompt, userPrompt);
+        } else if (provider === 'openrouter') {
           result = await this.callOpenRouter(systemPrompt, userPrompt);
         } else if (provider === 'gemini') {
           result = await this.callGemini(systemPrompt, userPrompt);
-        } else if (provider === 'nvidia') {
-          result = await this.callNvidiaNIM(systemPrompt, userPrompt);
         } else if (provider === 'bytez') {
           result = await this.callBytez(systemPrompt, userPrompt);
-        } else if (provider === 'supabase') {
-          result = await this.callSupabaseEdge(validatedInput);
         }
 
         if (result && result.rawJson) {
@@ -100,220 +101,76 @@ REQUIREMENTS:
         }
       } catch (err: any) {
         errorsEncountered.push(`[${provider.toUpperCase()}]: ${err.message}`);
-        console.warn(`Provider ${provider} failed: ${err.message}. Trying next available provider...`);
+        console.warn(`[SupabaseAIDecomposerService] Provider ${provider} failed: ${err.message}. Cascading to next available provider...`);
       }
     }
 
-    // If all providers in the queue failed, throw the detailed aggregated error
-    throw new Error(
-      `AI Service Error:\n${errorsEncountered.join('\n') || 'No AI providers were able to process this request.'}`,
-    );
+    // Never dump raw environment configuration or credential errors to end-users
+    console.error('[SupabaseAIDecomposerService] All providers failed:', errorsEncountered.join('\n'));
+    throw new Error('AI services are temporarily unavailable. Please try again later or create tasks manually.');
   }
 
-  private resolveProviderQueue(preference: string): Array<'openrouter' | 'gemini' | 'nvidia' | 'bytez' | 'supabase'> {
+  private resolveProviderQueue(preference: string): Array<'supabase' | 'nvidia' | 'openrouter' | 'gemini' | 'bytez'> {
     if (preference !== 'auto') {
       return [preference as any];
     }
 
-    const nvidiaKey = process.env.EXPO_PUBLIC_NVIDIA_API_KEY || process.env.NVIDIA_API_KEY;
-    const geminiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
-    const openRouterKey = process.env.EXPO_PUBLIC_OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY;
-    const bytezKey = process.env.EXPO_PUBLIC_BYTEZ_API_KEY || process.env.BYTEZ_API_KEY;
+    const queue: Array<'supabase' | 'nvidia' | 'openrouter' | 'gemini' | 'bytez'> = [];
 
-    const queue: Array<'openrouter' | 'gemini' | 'nvidia' | 'bytez' | 'supabase'> = [];
+    // 1. Secure Server-Side Edge Function is always the default/primary in production
+    if (isSupabaseConfigured()) {
+      queue.push('supabase');
+    }
 
-    // Fallback cascade: 1. NVIDIA NIM (default) -> 2. OpenRouter -> 3. Gemini -> 4. Bytez -> 5. Supabase
+    // 2. Local development fallback (only if developer has set server/local keys in their environment)
+    const nvidiaKey = process.env.NVIDIA_API_KEY || process.env.EXPO_PUBLIC_NVIDIA_API_KEY;
+    const openRouterKey = process.env.OPENROUTER_API_KEY || process.env.EXPO_PUBLIC_OPENROUTER_API_KEY;
+    const geminiKey = process.env.GEMINI_API_KEY || process.env.EXPO_PUBLIC_GEMINI_API_KEY;
+    const bytezKey = process.env.BYTEZ_API_KEY || process.env.EXPO_PUBLIC_BYTEZ_API_KEY;
+
     if (nvidiaKey) queue.push('nvidia');
     if (openRouterKey) queue.push('openrouter');
     if (geminiKey) queue.push('gemini');
     if (bytezKey) queue.push('bytez');
-    if (isSupabaseConfigured()) queue.push('supabase');
 
-    // Default cascade if none configured specifically
     if (queue.length === 0) {
-      queue.push('nvidia', 'openrouter', 'gemini', 'bytez');
+      // Default to trying Supabase edge function
+      queue.push('supabase');
     }
 
     return queue;
   }
 
-  // 1. OPENROUTER API
-  async callOpenRouter(systemPrompt: string, userPrompt: string): Promise<AIProviderResult> {
-    const key = process.env.EXPO_PUBLIC_OPENROUTER_API_KEY || process.env.OPENROUTER_API_KEY;
-    const configuredModel =
-      process.env.EXPO_PUBLIC_OPENROUTER_MODEL ||
-      process.env.OPENROUTER_MODEL ||
-      'cohere/north-mini-code:free';
+  // 1. SUPABASE EDGE FUNCTION PROXY (Primary & Secure)
+  async callSupabaseEdge(validatedInput: DecomposeGoalInput): Promise<AIProviderResult | null> {
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Supabase Edge Function timed out (>40s)')), 40000),
+    );
 
-    if (!key) {
-      throw new Error('OPENROUTER_API_KEY not configured in .env');
+    const invokePromise = this.client.functions.invoke('ai-decompose', {
+      body: validatedInput,
+    });
+
+    const response: any = await Promise.race([invokePromise, timeoutPromise]);
+    if (response.error) {
+      throw new Error(response.error.message || 'Edge function returned non-2xx status code');
     }
 
-    const candidateModels = [
-      configuredModel,
-      'cohere/north-mini-code:free',
-      'google/gemma-4-31b-it:free',
-      'google/gemma-4-26b-a4b-it:free',
-      'nvidia/nemotron-3.5-super-vl:free',
-      'liquid/lfm-2.5-2.6b:free',
-      'recursive/flint-v1.0:free',
-    ];
-    const modelsToTry = [...new Set(candidateModels.filter(Boolean))];
-
-    let lastError = '';
-
-    for (const currentModel of modelsToTry) {
-      try {
-        const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${key}`,
-            'HTTP-Referer': 'https://momentum.app',
-            'X-Title': 'Momentum Todo App',
-          },
-          body: JSON.stringify({
-            model: currentModel,
-            messages: [
-              { role: 'system', content: `${systemPrompt}\nStrictly output valid raw JSON only, no markdown code blocks, no conversation.` },
-              { role: 'user', content: userPrompt },
-            ],
-            temperature: 0.2,
-            max_tokens: 4096,
-          }),
-        });
-
-        if (!response.ok) {
-          const errText = await response.text();
-          let msg = errText;
-          try {
-            const errObj = JSON.parse(errText);
-            if (errObj.error?.message) msg = errObj.error.message;
-          } catch {}
-          lastError = `OpenRouter (${response.status}) on ${currentModel}: ${msg}`;
-          console.warn(`[OpenRouter] Model ${currentModel} returned ${response.status}: ${msg}. Trying next candidate model...`);
-          continue;
-        }
-
-        const data = await response.json();
-        const choice = data?.choices?.[0];
-        let rawJson = choice?.message?.content || '';
-        if (!rawJson.trim()) {
-          rawJson = choice?.message?.reasoning || choice?.message?.reasoning_content || '';
-        }
-
-        if (!rawJson.trim()) {
-          lastError = `OpenRouter (${currentModel}): Empty message content`;
-          console.warn(`[OpenRouter] Model ${currentModel} returned empty content. Trying next candidate model...`);
-          continue;
-        }
-
-        // Validate JSON can be parsed
-        try {
-          this.extractJson(rawJson);
-          return { rawJson, providerName: 'OpenRouter', modelName: currentModel };
-        } catch (parseErr: any) {
-          lastError = `OpenRouter (${currentModel}): Failed to parse JSON: ${parseErr.message}`;
-          console.warn(`[OpenRouter] Model ${currentModel} output invalid JSON. Trying next candidate model...`);
-          continue;
-        }
-      } catch (err: any) {
-        lastError = `OpenRouter (${currentModel}): ${err.message}`;
-        console.warn(`[OpenRouter] Model ${currentModel} network error: ${err.message}. Trying next candidate model...`);
-      }
-    }
-
-    throw new Error(lastError || 'OpenRouter all candidate free models failed');
+    if (!response.data) return null;
+    return {
+      rawJson: JSON.stringify(response.data),
+      providerName: response.data.providerUsed || 'Cloud AI',
+      modelName: 'Production Cascade',
+    };
   }
 
-  // 2. GOOGLE GEMINI API
-  async callGemini(systemPrompt: string, userPrompt: string): Promise<AIProviderResult> {
-    const key = process.env.EXPO_PUBLIC_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
-    const configuredModel =
-      process.env.EXPO_PUBLIC_GEMINI_MODEL ||
-      process.env.GEMINI_MODEL ||
-      'gemini-flash-lite-latest';
-
-    if (!key) {
-      throw new Error('GEMINI_API_KEY not configured in .env');
-    }
-
-    const candidateModels = [
-      configuredModel,
-      'gemini-flash-lite-latest',
-      'gemini-3.5-flash',
-      'gemma-4-26b-a4b-it',
-      'gemma-4-31b-it',
-      'gemini-flash-latest',
-      'gemini-3.8-flash',
-    ];
-    const modelsToTry = [...new Set(candidateModels.filter(Boolean))];
-
-    let lastError = '';
-    for (const currentModel of modelsToTry) {
-      try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${key}`;
-        const response = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            contents: [
-              {
-                role: 'user',
-                parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }],
-              },
-            ],
-            generationConfig: {
-              temperature: 0.2,
-              maxOutputTokens: 4096,
-              responseMimeType: 'application/json',
-            },
-          }),
-        });
-
-        if (!response.ok) {
-          const errText = await response.text();
-          let msg = errText;
-          try {
-            const errObj = JSON.parse(errText);
-            if (errObj.error?.message) msg = errObj.error.message;
-          } catch {}
-          lastError = `Gemini (${response.status}) on ${currentModel}: ${msg}`;
-          console.warn(`[Gemini] Model ${currentModel} returned ${response.status}: ${msg}. Trying next candidate model...`);
-          continue;
-        }
-
-        const data = await response.json();
-        const rawJson = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-        if (rawJson) {
-          try {
-            this.extractJson(rawJson);
-            return { rawJson, providerName: 'Google Gemini', modelName: currentModel };
-          } catch (parseErr: any) {
-            lastError = `Gemini (${currentModel}): Failed to parse JSON: ${parseErr.message}`;
-            continue;
-          }
-        }
-      } catch (e: any) {
-        lastError = `Gemini (${currentModel}): ${e.message}`;
-      }
-    }
-
-    throw new Error(lastError || 'Gemini returned empty content');
-  }
-
-  // 3. NVIDIA NIM API
+  // 2. NVIDIA NIM API (Local dev fallback)
   async callNvidiaNIM(systemPrompt: string, userPrompt: string): Promise<AIProviderResult> {
-    const key = process.env.EXPO_PUBLIC_NVIDIA_API_KEY || process.env.NVIDIA_API_KEY;
-    const model =
-      process.env.EXPO_PUBLIC_NVIDIA_MODEL ||
-      process.env.NVIDIA_MODEL ||
-      'nvidia/nemotron-3.5-super-vl-120b-a12b';
+    const key = process.env.NVIDIA_API_KEY || process.env.EXPO_PUBLIC_NVIDIA_API_KEY;
+    const model = process.env.NVIDIA_MODEL || process.env.EXPO_PUBLIC_NVIDIA_MODEL || 'nvidia/nemotron-3.5-super-vl-120b-a12b';
 
     if (!key) {
-      throw new Error('NVIDIA_API_KEY not configured in .env (ensure EXPO_PUBLIC_NVIDIA_API_KEY is set)');
+      throw new Error('NVIDIA_API_KEY not configured');
     }
 
     const response = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
@@ -349,48 +206,44 @@ REQUIREMENTS:
     const rawJson = message?.content || message?.reasoning_content || message?.reasoning || '';
     if (!rawJson) throw new Error('NVIDIA NIM returned empty content');
 
-    // Pre-validate JSON extraction
     this.extractJson(rawJson);
-
     return { rawJson, providerName: 'NVIDIA NIM', modelName: model };
   }
 
-  // 4. BYTEZ API
-  async callBytez(systemPrompt: string, userPrompt: string): Promise<AIProviderResult> {
-    const key =
-      process.env.EXPO_PUBLIC_BYTEZ_API_KEY ||
-      process.env.BYTEZ_API_KEY ||
-      '0026a51ee9cb158a930840b63f2d19f5';
-    const model =
-      process.env.EXPO_PUBLIC_BYTEZ_MODEL ||
-      process.env.BYTEZ_MODEL ||
-      'Qwen/Qwen3-4B';
+  // 3. OPENROUTER API (Local dev fallback)
+  async callOpenRouter(systemPrompt: string, userPrompt: string): Promise<AIProviderResult> {
+    const key = process.env.OPENROUTER_API_KEY || process.env.EXPO_PUBLIC_OPENROUTER_API_KEY;
+    const configuredModel = process.env.OPENROUTER_MODEL || process.env.EXPO_PUBLIC_OPENROUTER_MODEL || 'cohere/north-mini-code:free';
 
     if (!key) {
-      throw new Error('BYTEZ_API_KEY not configured in .env');
+      throw new Error('OPENROUTER_API_KEY not configured');
     }
 
-    const modelsToTry = [model];
-    if (model.includes('Qwen3') || model.includes('qwen3')) {
-      modelsToTry.push('Qwen/Qwen2.5-7B-Instruct', 'google/gemma-2-2b-it');
-    }
+    const candidateModels = [
+      configuredModel,
+      'cohere/north-mini-code:free',
+      'google/gemma-4-31b-it:free',
+      'google/gemma-4-26b-a4b-it:free',
+      'nvidia/nemotron-3.5-super-vl:free',
+      'liquid/lfm-2.5-2.6b:free',
+    ];
+    const modelsToTry = [...new Set(candidateModels.filter(Boolean))];
 
-    let rawJson = '';
     let lastError = '';
-
     for (const currentModel of modelsToTry) {
-      // Attempt A: Bytez OpenAI-compatible endpoint
       try {
-        const response = await fetch('https://api.bytez.com/models/v2/openai/v1/chat/completions', {
+        const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${key}`,
+            'HTTP-Referer': 'https://momentum.app',
+            'X-Title': 'Momentum Todo App',
           },
           body: JSON.stringify({
             model: currentModel,
             messages: [
-              { role: 'system', content: systemPrompt },
+              { role: 'system', content: `${systemPrompt}\nStrictly output valid raw JSON only.` },
               { role: 'user', content: userPrompt },
             ],
             temperature: 0.2,
@@ -398,91 +251,120 @@ REQUIREMENTS:
           }),
         });
 
-        if (response.ok) {
-          const data = await response.json();
-          rawJson = data?.choices?.[0]?.message?.content || '';
-          if (rawJson) return { rawJson, providerName: 'Bytez', modelName: currentModel };
-        } else {
-          const errorText = await response.text();
-          try {
-            const errObj = JSON.parse(errorText);
-            lastError = errObj.error || errorText;
-          } catch {
-            lastError = errorText;
-          }
+        if (!response.ok) {
+          const errText = await response.text();
+          lastError = `OpenRouter (${response.status}) on ${currentModel}: ${errText.slice(0, 100)}`;
+          continue;
         }
-      } catch (e: any) {
-        lastError = e.message;
-      }
 
-      // Attempt B: Bytez Native Model endpoint
+        const data = await response.json();
+        const choice = data?.choices?.[0];
+        let rawJson = choice?.message?.content || choice?.message?.reasoning || '';
+
+        if (!rawJson.trim()) {
+          lastError = `OpenRouter (${currentModel}): Empty message content`;
+          continue;
+        }
+
+        this.extractJson(rawJson);
+        return { rawJson, providerName: 'OpenRouter', modelName: currentModel };
+      } catch (err: any) {
+        lastError = `OpenRouter (${currentModel}): ${err.message}`;
+      }
+    }
+
+    throw new Error(lastError || 'OpenRouter all candidate free models failed');
+  }
+
+  // 4. GOOGLE GEMINI API (Local dev fallback)
+  async callGemini(systemPrompt: string, userPrompt: string): Promise<AIProviderResult> {
+    const key = process.env.GEMINI_API_KEY || process.env.EXPO_PUBLIC_GEMINI_API_KEY;
+    const configuredModel = process.env.GEMINI_MODEL || process.env.EXPO_PUBLIC_GEMINI_MODEL || 'gemini-flash-lite-latest';
+
+    if (!key) {
+      throw new Error('GEMINI_API_KEY not configured');
+    }
+
+    const candidateModels = [
+      configuredModel,
+      'gemini-flash-lite-latest',
+      'gemini-2.0-flash-lite',
+      'gemini-1.5-flash-latest',
+    ];
+    const modelsToTry = [...new Set(candidateModels.filter(Boolean))];
+
+    let lastError = '';
+    for (const currentModel of modelsToTry) {
       try {
-        const response = await fetch(`https://api.bytez.com/models/v2/${currentModel}`, {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${key}`;
+        const response = await fetch(url, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Key ${key}`,
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            messages: [
-              { role: 'system', content: systemPrompt },
-              { role: 'user', content: userPrompt },
-            ],
-            params: {
-              max_new_tokens: 4096,
+            contents: [{ role: 'user', parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }] }],
+            generationConfig: {
               temperature: 0.2,
+              maxOutputTokens: 4096,
+              responseMimeType: 'application/json',
             },
           }),
         });
 
-        if (response.ok) {
-          const data = await response.json();
-          rawJson =
-            data?.output?.content?.[0]?.text ||
-            (typeof data?.output === 'string' ? data.output : JSON.stringify(data?.output || ''));
-          if (rawJson) return { rawJson, providerName: 'Bytez', modelName: currentModel };
-        } else {
-          const errorText = await response.text();
-          try {
-            const errObj = JSON.parse(errorText);
-            lastError = errObj.error || errorText;
-          } catch {
-            lastError = errorText;
-          }
+        if (!response.ok) {
+          const errText = await response.text();
+          lastError = `Gemini (${response.status}) on ${currentModel}: ${errText.slice(0, 100)}`;
+          continue;
+        }
+
+        const data = await response.json();
+        const rawJson = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        if (rawJson) {
+          this.extractJson(rawJson);
+          return { rawJson, providerName: 'Google Gemini', modelName: currentModel };
         }
       } catch (e: any) {
-        lastError = e.message;
+        lastError = `Gemini (${currentModel}): ${e.message}`;
       }
     }
 
-    if (!rawJson) {
-      throw new Error(`Bytez: ${lastError || 'Model does not exist or has yet to be added to the Bytez catalog'}`);
-    }
-
-    return { rawJson, providerName: 'Bytez', modelName: model };
+    throw new Error(lastError || 'Gemini returned empty content');
   }
 
-  // 5. SUPABASE EDGE FUNCTION PROXY
-  async callSupabaseEdge(validatedInput: DecomposeGoalInput): Promise<AIProviderResult | null> {
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('Supabase Edge Function timed out (>15s)')), 15000),
-    );
+  // 5. BYTEZ API (Local dev fallback)
+  async callBytez(systemPrompt: string, userPrompt: string): Promise<AIProviderResult> {
+    const key = process.env.BYTEZ_API_KEY || process.env.EXPO_PUBLIC_BYTEZ_API_KEY;
+    const model = process.env.BYTEZ_MODEL || process.env.EXPO_PUBLIC_BYTEZ_MODEL || 'Qwen/Qwen2.5-7B-Instruct';
 
-    const invokePromise = this.client.functions.invoke('ai-decompose', {
-      body: validatedInput,
-    });
-
-    const response: any = await Promise.race([invokePromise, timeoutPromise]);
-    if (response.error) {
-      throw new Error(response.error.message || 'Edge function returned non-2xx status code');
+    if (!key) {
+      throw new Error('BYTEZ_API_KEY not configured');
     }
 
-    if (!response.data) return null;
-    return {
-      rawJson: JSON.stringify(response.data),
-      providerName: 'Supabase Edge Proxy',
-      modelName: 'Cloud AI',
-    };
+    try {
+      const response = await fetch('https://api.bytez.com/models/v2/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${key}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt },
+          ],
+          temperature: 0.2,
+          max_tokens: 4096,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const rawJson = data?.choices?.[0]?.message?.content || '';
+        if (rawJson) return { rawJson, providerName: 'Bytez', modelName: model };
+      }
+    } catch {}
+
+    throw new Error('Bytez AI inference failed');
   }
 
   private extractJson(rawText: string): any {
@@ -513,7 +395,6 @@ REQUIREMENTS:
       const ts = Date.parse(trimmed);
       if (!isNaN(ts)) {
         const d = new Date(ts);
-        // Only accept if date is valid and NOT in the past (e.g. LLM hallucinated 2023 or older)
         if (d.getFullYear() >= currentYear && ts > nowTs - 86400000) {
           return d.toISOString();
         }
@@ -651,7 +532,8 @@ REQUIREMENTS:
       text.includes('react') ||
       text.includes('python') ||
       text.includes('api') ||
-      text.includes('dev')
+      text.includes('dev') ||
+      text.includes('angular')
     ) {
       return {
         role: 'Senior Engineering Manager & Technical Project Lead',

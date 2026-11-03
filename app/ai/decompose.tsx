@@ -20,6 +20,7 @@ import { DatePickerField, DatePickerModal } from '../../src/presentation/compone
 import { ServiceContainer } from '../../src/services/ServiceContainer';
 import { useUIStore } from '../../src/presentation/stores/uiStore';
 import { GoalDecompositionProposal } from '../../src/domain/ai/AIDecomposerTypes';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 interface DurationSelectorProps {
   hours: number;
@@ -205,6 +206,7 @@ function DurationSelector({ hours, minutes, onChange }: DurationSelectorProps) {
 
 export default function AIDecomposeScreen() {
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
 
   // Step state: 'input' | 'loading' | 'review' | 'success'
   const [step, setStep] = useState<'input' | 'loading' | 'review' | 'success'>('input');
@@ -373,7 +375,7 @@ export default function AIDecomposeScreen() {
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <ScreenHeader title="AI Goal Decomposer" onBack={handleBackToPrevious} />
 
-      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: 60 }}>
+      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: Math.max(insets.bottom, 16) + 80 }}>
         {/* Header Title */}
         <View style={{ marginBottom: spacing.lg }}>
           <View style={styles.titleRow}>

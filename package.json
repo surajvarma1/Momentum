@@ -60,7 +60,8 @@
         "expo-router",
         "expo-splash-screen",
         "expo-sqlite",
-        "react-native-screens"
+        "react-native-screens",
+        "react-native"
       ]
     }
   },

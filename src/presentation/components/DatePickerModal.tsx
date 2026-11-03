@@ -11,6 +11,11 @@ import {
 import { useTheme } from '../theme/useTheme';
 import { spacing, typography, radii, shadows } from '../theme/tokens';
 import { Button } from './Button';
+import {
+  toDateOnlyString,
+  parseDateOnly,
+  formatDisplayDate,
+} from '../../utils/dateUtils';
 
 interface DatePickerModalProps {
   visible: boolean;
@@ -36,16 +41,16 @@ export function DatePickerModal({
   const { colors } = useTheme();
 
   // Parse initial date or default to today
-  const init = initialDate ? new Date(initialDate) : new Date();
+  const init = initialDate ? parseDateOnly(initialDate) : new Date();
   const safeInit = isNaN(init.getTime()) ? new Date() : init;
 
   const [viewYear, setViewYear] = useState(safeInit.getFullYear());
   const [viewMonth, setViewMonth] = useState(safeInit.getMonth()); // 0-11
   const [selectedDate, setSelectedDate] = useState<string>(
-    initialDate ? initialDate.split('T')[0] : '',
+    initialDate ? toDateOnlyString(initialDate) : '',
   );
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = toDateOnlyString(new Date());
 
   const handlePrevMonth = () => {
     if (viewMonth === 0) {
@@ -75,7 +80,7 @@ export function DatePickerModal({
   const handleApplyPreset = (daysFromNow: number) => {
     const target = new Date();
     target.setDate(target.getDate() + daysFromNow);
-    const dateStr = target.toISOString().split('T')[0];
+    const dateStr = toDateOnlyString(target);
     setSelectedDate(dateStr);
     setViewYear(target.getFullYear());
     setViewMonth(target.getMonth());
@@ -83,8 +88,8 @@ export function DatePickerModal({
 
   const handleConfirm = () => {
     if (selectedDate) {
-      // Returns YYYY-MM-DD with end-of-day time for deadlines
-      onSelectDate(`${selectedDate}T23:59:59.000Z`);
+      // Returns exact date-only YYYY-MM-DD
+      onSelectDate(selectedDate);
     }
     onClose();
   };
@@ -267,18 +272,7 @@ export function DatePickerField({
 
   const formatDisplay = (raw: string): string => {
     if (!raw) return '';
-    try {
-      const d = new Date(raw);
-      if (isNaN(d.getTime())) return raw.split('T')[0];
-      return d.toLocaleDateString('en-US', {
-        weekday: 'short',
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-      });
-    } catch {
-      return raw.split('T')[0];
-    }
+    return formatDisplayDate(raw);
   };
 
   return (

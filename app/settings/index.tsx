@@ -1,21 +1,24 @@
 /**
- * Settings main screen — theme selector, defaults, offline status,
- * navigation to reminders, and application diagnostics.
+ * Settings main screen — simplified for production release.
+ * Retains user preferences: Theme, Account & Cloud Sync, Task Defaults,
+ * Notifications, and App Information.
  */
 
-import React, { useState } from 'react';
-import { View, Text, ScrollView, Pressable, StyleSheet, Switch, TextInput } from 'react-native';
+import React from 'react';
+import { View, Text, ScrollView, Pressable, StyleSheet, Switch, Alert } from 'react-native';
 import { router } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../../src/presentation/theme/useTheme';
 import { spacing, typography, radii } from '../../src/presentation/theme/tokens';
 import { useSettingsStore, ThemePreference } from '../../src/presentation/stores/settingsStore';
 import { Card } from '../../src/presentation/components/Card';
 import { Badge } from '../../src/presentation/components/Badge';
-import { Button } from '../../src/presentation/components/Button';
 import { ScreenHeader } from '../../src/presentation/components/ScreenHeader';
+import { useAuthStore } from '../../src/presentation/stores/authStore';
 
 export default function SettingsScreen() {
   const { colors, preference, setThemePreference } = useTheme();
+  const insets = useSafeAreaInsets();
   const {
     theme,
     setTheme,
@@ -24,6 +27,8 @@ export default function SettingsScreen() {
     defaultPriority,
     setDefaultPriority,
   } = useSettingsStore();
+
+  const { user, isGuest } = useAuthStore();
 
   const handleThemeChange = (newTheme: ThemePreference) => {
     setTheme(newTheme);
@@ -43,11 +48,32 @@ export default function SettingsScreen() {
     'IMPORTANT',
   ];
 
+  const showPrivacyPolicy = () => {
+    Alert.alert(
+      'Privacy Policy',
+      'Momentum stores your tasks locally on your device by default using SQLite. When Cloud Sync is connected, your tasks synchronize securely with end-to-end user isolation via Supabase Row-Level Security. We never sell or share your personal productivity data.',
+      [{ text: 'Understood' }],
+    );
+  };
+
+  const showTerms = () => {
+    Alert.alert(
+      'Terms of Service',
+      'Momentum is provided for personal productivity tracking and goal decomposition. Use of cloud sync requires an active account.',
+      [{ text: 'Close' }],
+    );
+  };
+
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <ScreenHeader title="Settings" />
 
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingBottom: Math.max(insets.bottom, 16) + 80 },
+        ]}
+      >
         {/* Account & Cloud Sync Section */}
         <View style={styles.section}>
           <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
@@ -60,64 +86,24 @@ export default function SettingsScreen() {
               accessibilityRole="button"
               accessibilityLabel="Account and Sync Settings"
             >
-              <View>
-                <Text style={[styles.label, { color: colors.textPrimary }]}>
-                  Cloud Sync & Account
-                </Text>
+              <View style={{ flex: 1, paddingRight: spacing.sm }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}>
+                  <Text style={[styles.label, { color: colors.textPrimary }]}>
+                    {isGuest ? 'Cloud Sync & Backup' : user?.email || 'Account'}
+                  </Text>
+                  <Badge
+                    label={isGuest ? 'Guest' : 'Connected'}
+                    size="sm"
+                  />
+                </View>
                 <Text style={[styles.sublabel, { color: colors.textSecondary }]}>
-                  Manage login, cloud backup, and sync status
+                  {isGuest
+                    ? 'Connect an account to backup and sync your tasks'
+                    : 'Manage cloud account and synchronization status'}
                 </Text>
               </View>
               <Text style={[styles.chevron, { color: colors.textTertiary }]}>→</Text>
             </Pressable>
-          </Card>
-        </View>
-
-        {/* AI & LLM Model Integration Section */}
-        <View style={styles.section}>
-          <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
-            AI & LLM SERVICES
-          </Text>
-          <Card style={styles.card}>
-            <Pressable
-              onPress={() => router.push('/ai/decompose')}
-              style={styles.navRow}
-              accessibilityRole="button"
-              accessibilityLabel="Open AI Goal Decomposer"
-            >
-              <View>
-                <Text style={[styles.label, { color: colors.textPrimary }]}>
-                  Launch AI Goal Decomposer
-                </Text>
-                <Text style={[styles.sublabel, { color: colors.textSecondary }]}>
-                  Decompose goals into milestones and focus tasks
-                </Text>
-              </View>
-              <Text style={[styles.chevron, { color: colors.textTertiary }]}>→</Text>
-            </Pressable>
-
-            <View style={[styles.divider, { backgroundColor: colors.borderLight }]} />
-
-            <View>
-              <View style={styles.aiHeaderRow}>
-                <Text style={[styles.label, { color: colors.textPrimary }]}>
-                  AI Intelligence Providers
-                </Text>
-                <Badge
-                  label="Multi-Model Active"
-                  color={{ bg: '#052e16', text: '#4ADE80' }}
-                  size="sm"
-                />
-              </View>
-              <Text style={[styles.sublabel, { color: colors.textSecondary, marginTop: 2 }]}>
-                Supported: OpenRouter, Gemini, NVIDIA NIM, and Bytez
-              </Text>
-              <View style={[styles.privacyBox, { backgroundColor: colors.backgroundSecondary, borderColor: colors.border }]}>
-                <Text style={[styles.privacyText, { color: colors.textSecondary }]}>
-                  🔒 Configure your API keys securely in root .env. Supports free OpenRouter models, Gemini 1.5/2.0, NVIDIA NIM, and Bytez.
-                </Text>
-              </View>
-            </View>
           </Card>
         </View>
 
@@ -240,9 +226,36 @@ export default function SettingsScreen() {
                   Reminders & Quiet Hours
                 </Text>
                 <Text style={[styles.sublabel, { color: colors.textSecondary }]}>
-                  Configure notification policies
+                  Configure notification policies and quiet time windows
                 </Text>
               </View>
+              <Text style={[styles.chevron, { color: colors.textTertiary }]}>→</Text>
+            </Pressable>
+          </Card>
+        </View>
+
+        {/* About Momentum */}
+        <View style={styles.section}>
+          <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>
+            ABOUT MOMENTUM
+          </Text>
+          <Card style={styles.card}>
+            <View style={styles.infoRow}>
+              <Text style={[styles.infoLabel, { color: colors.textSecondary }]}>Version</Text>
+              <Text style={[styles.infoVal, { color: colors.textPrimary }]}>1.0.0 (Production)</Text>
+            </View>
+            <View style={[styles.divider, { backgroundColor: colors.borderLight }]} />
+            <Pressable onPress={showPrivacyPolicy} style={styles.navRow}>
+              <Text style={[styles.label, { color: colors.textPrimary, fontSize: typography.fontSize.sm }]}>
+                Privacy Policy
+              </Text>
+              <Text style={[styles.chevron, { color: colors.textTertiary }]}>→</Text>
+            </Pressable>
+            <View style={[styles.divider, { backgroundColor: colors.borderLight }]} />
+            <Pressable onPress={showTerms} style={styles.navRow}>
+              <Text style={[styles.label, { color: colors.textPrimary, fontSize: typography.fontSize.sm }]}>
+                Terms of Service
+              </Text>
               <Text style={[styles.chevron, { color: colors.textTertiary }]}>→</Text>
             </Pressable>
           </Card>
@@ -258,7 +271,6 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     padding: spacing.base,
-    paddingBottom: 60,
   },
   section: {
     marginBottom: spacing.lg,
@@ -279,22 +291,6 @@ const styles = StyleSheet.create({
   sublabel: {
     fontSize: typography.fontSize.xs,
     marginTop: 2,
-  },
-  aiHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 4,
-  },
-  privacyBox: {
-    marginTop: spacing.sm,
-    padding: spacing.sm,
-    borderRadius: radii.md,
-    borderWidth: 1,
-  },
-  privacyText: {
-    fontSize: 11,
-    lineHeight: 16,
   },
   radioGroup: {
     flexDirection: 'row',
@@ -339,6 +335,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    paddingVertical: spacing.xs,
   },
   chevron: {
     fontSize: 20,
@@ -348,7 +345,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: spacing.xs + 2,
+    paddingVertical: spacing.xs,
   },
   infoLabel: {
     fontSize: typography.fontSize.sm,

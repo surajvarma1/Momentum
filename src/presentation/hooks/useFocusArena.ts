@@ -26,7 +26,7 @@ export interface UseFocusArenaResult {
   isPaused: boolean;
   isBreak: boolean;
   interruptionPrompt: { visible: boolean; awayDurationSeconds: number } | null;
-  startSession: (taskId?: string | null) => Promise<void>;
+  startSession: (taskId?: string | null, customDurationMinutes?: number) => Promise<void>;
   pauseSession: () => Promise<void>;
   resumeSession: () => Promise<void>;
   startBreak: () => Promise<void>;
@@ -131,9 +131,12 @@ export function useFocusArena(): UseFocusArenaResult {
     return () => subscription.remove();
   }, [session, services, focusAccountabilityEnabled]);
 
-  const startSession = async (taskId?: string | null) => {
+  const startSession = async (taskId?: string | null, customDurationMinutes?: number) => {
     if (!services.manageFocusSession) return;
-    const targetMs = focusDurationMinutes * 60 * 1000;
+    const duration = customDurationMinutes && customDurationMinutes >= 1 && customDurationMinutes <= 240
+      ? customDurationMinutes
+      : focusDurationMinutes;
+    const targetMs = duration * 60 * 1000;
     const breakMs = breakDurationMinutes * 60 * 1000;
     const newSession = await services.manageFocusSession.start(taskId, targetMs, breakMs);
     setSession(newSession);

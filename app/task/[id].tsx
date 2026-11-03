@@ -27,6 +27,7 @@ import { ErrorState } from '../../src/presentation/components/ErrorState';
 import { isTaskOverdue } from '../../src/domain/entities/Task';
 import { useReminders } from '../../src/presentation/hooks/useReminders';
 import { ScreenHeader } from '../../src/presentation/components/ScreenHeader';
+import { formatDisplayDate } from '../../src/utils/dateUtils';
 
 export default function TaskDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -144,7 +145,7 @@ export default function TaskDetailScreen() {
                     { color: overdue ? colors.error : colors.textPrimary },
                   ]}
                 >
-                  📅 {task.deadline.split('T')[0]} {overdue ? '(Overdue)' : ''}
+                  📅 {formatDisplayDate(task.deadline)} {overdue ? '(Overdue)' : ''}
                 </Text>
               </View>
             )}

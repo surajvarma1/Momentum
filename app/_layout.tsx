@@ -7,6 +7,7 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, Pressable } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemeProvider } from '../src/presentation/theme/ThemeContext';
 import { ServiceProvider } from '../src/presentation/hooks/useServices';
 import { useTheme } from '../src/presentation/theme/useTheme';
@@ -20,9 +21,11 @@ import { NotificationService } from '../src/services/NotificationService';
 import { ServiceContainer } from '../src/services/ServiceContainer';
 import { LoadingState } from '../src/presentation/components/LoadingState';
 import { useUIStore } from '../src/presentation/stores/uiStore';
+import { useAuthStore } from '../src/presentation/stores/authStore';
 
 function GlobalSnackbar() {
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const snackbar = useUIStore((s) => s.snackbar);
   const hideSnackbar = useUIStore((s) => s.hideSnackbar);
 
@@ -48,7 +51,7 @@ function GlobalSnackbar() {
     <View
       style={{
         position: 'absolute',
-        bottom: 30,
+        bottom: Math.max(insets.bottom, 16) + 16,
         left: 20,
         right: 20,
         backgroundColor: bg,
@@ -191,6 +194,16 @@ export default function RootLayout() {
           }
         })();
 
+        // Restore auth session and start cloud sync monitoring
+        (async () => {
+          try {
+            await useAuthStore.getState().initialize();
+            svc.syncEngine?.startNetworkMonitoring();
+          } catch {
+            // Best effort
+          }
+        })();
+
         if (mounted) setContainer(svc);
       } catch (err) {
         if (mounted) {
@@ -205,23 +218,29 @@ export default function RootLayout() {
 
   if (error) {
     return (
-      <ThemeProvider>
-        <LoadingState message={`Error: ${error}`} />
-      </ThemeProvider>
+      <SafeAreaProvider>
+        <ThemeProvider>
+          <LoadingState message={`Error: ${error}`} />
+        </ThemeProvider>
+      </SafeAreaProvider>
     );
   }
 
   if (!container) {
     return (
-      <ThemeProvider>
-        <LoadingState message="Starting Momentum…" />
-      </ThemeProvider>
+      <SafeAreaProvider>
+        <ThemeProvider>
+          <LoadingState message="Starting Momentum…" />
+        </ThemeProvider>
+      </SafeAreaProvider>
     );
   }
 
   return (
-    <ThemeProvider>
-      <AppWithServices container={container} />
-    </ThemeProvider>
+    <SafeAreaProvider>
+      <ThemeProvider>
+        <AppWithServices container={container} />
+      </ThemeProvider>
+    </SafeAreaProvider>
   );
 }

@@ -15,6 +15,11 @@ import {
 import { StatusBadge } from './StatusBadge';
 import { Badge } from './Badge';
 import type { Task } from '../../domain/entities/Task';
+import {
+  toDateOnlyString,
+  parseDateOnly,
+  formatDisplayDate,
+} from '../../utils/dateUtils';
 
 interface TaskCardProps {
   task: Task;
@@ -40,22 +45,22 @@ export function TaskCard({
   const totalSubtasks = task.subtasks.length;
 
   const formatDeadline = (deadline: string): string => {
-    const date = new Date(deadline);
-    const now = new Date();
-    const diffDays = Math.ceil(
-      (date.getTime() - now.getTime()) / (1000 * 60 * 60 * 24),
+    const deadlineYmd = toDateOnlyString(deadline);
+    const todayYmd = toDateOnlyString(new Date());
+
+    if (deadlineYmd === todayYmd) return 'Today';
+
+    const deadlineDate = parseDateOnly(deadlineYmd);
+    const todayDate = parseDateOnly(todayYmd);
+    const diffDays = Math.round(
+      (deadlineDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24),
     );
 
-    if (diffDays === 0) return 'Today';
     if (diffDays === 1) return 'Tomorrow';
     if (diffDays === -1) return 'Yesterday';
     if (diffDays < 0) return `${Math.abs(diffDays)}d overdue`;
-    if (diffDays <= 7)
-      return date.toLocaleDateString('en-US', { weekday: 'short' });
-    return date.toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-    });
+    if (diffDays <= 7) return formatDisplayDate(deadlineDate, { includeWeekday: true }).split(',')[0];
+    return formatDisplayDate(deadlineDate, { includeWeekday: false });
   };
 
   const isCompleted = task.status === 'COMPLETED' || animatingComplete;

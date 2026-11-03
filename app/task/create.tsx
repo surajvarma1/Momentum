@@ -25,9 +25,12 @@ import { Button } from '../../src/presentation/components/Button';
 import { Card } from '../../src/presentation/components/Card';
 import { ScreenHeader } from '../../src/presentation/components/ScreenHeader';
 import { DatePickerField } from '../../src/presentation/components/DatePickerModal';
+import { TaskReminderPicker } from '../../src/presentation/components/TaskReminderPicker';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function CreateTaskScreen() {
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const {
     form,
     errors,
@@ -54,7 +57,7 @@ export default function CreateTaskScreen() {
     >
       <ScreenHeader title="New Task" />
 
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(insets.bottom, 16) + 80 }]}>
         {errors.general && (
           <View style={[styles.generalError, { backgroundColor: colors.error + '20', borderColor: colors.error }]}>
             <Text style={[styles.generalErrorText, { color: colors.error }]}>
@@ -122,6 +125,16 @@ export default function CreateTaskScreen() {
             />
           </View>
         </View>
+
+        {/* Task-Specific Daily Reminder */}
+        <TaskReminderPicker
+          enabled={form.reminderEnabled}
+          onToggleEnabled={(v) => updateField('reminderEnabled', v)}
+          time={form.reminderTime}
+          onChangeTime={(v) => updateField('reminderTime', v)}
+          frequency={form.reminderFrequency}
+          onChangeFrequency={(v) => updateField('reminderFrequency', v)}
+        />
 
         {/* Tags */}
         <Card style={styles.cardSection}>

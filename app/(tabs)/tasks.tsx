@@ -23,6 +23,7 @@ import { EmptyState } from '../../src/presentation/components/EmptyState';
 import { LoadingState } from '../../src/presentation/components/LoadingState';
 import { ErrorState } from '../../src/presentation/components/ErrorState';
 import { Task, isTaskOverdue } from '../../src/domain/entities/Task';
+import { toDateOnlyString } from '../../src/utils/dateUtils';
 
 type FilterType = 'ALL' | 'TODAY' | 'UPCOMING' | 'OVERDUE' | 'COMPLETED';
 
@@ -49,7 +50,7 @@ export default function TasksScreen() {
   );
 
   const now = services.clock.now();
-  const todayDateStr = now.split('T')[0];
+  const todayDateStr = toDateOnlyString(new Date());
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -59,17 +60,7 @@ export default function TasksScreen() {
 
   const isDateToday = (dateStr: string | null | undefined): boolean => {
     if (!dateStr) return false;
-    try {
-      const d = new Date(dateStr);
-      const cur = new Date();
-      return (
-        d.getFullYear() === cur.getFullYear() &&
-        d.getMonth() === cur.getMonth() &&
-        d.getDate() === cur.getDate()
-      );
-    } catch {
-      return false;
-    }
+    return toDateOnlyString(dateStr) === todayDateStr;
   };
 
   const filteredTasks = useMemo(() => {

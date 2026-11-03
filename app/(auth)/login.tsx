@@ -15,9 +15,11 @@ import { Button } from '../../src/presentation/components/Button';
 import { Card } from '../../src/presentation/components/Card';
 import { Dialog } from '../../src/presentation/components/Dialog';
 import { useAuthStore } from '../../src/presentation/stores/authStore';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function LoginScreen() {
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
 
   const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
   const [email, setEmail] = useState('');
@@ -84,7 +86,7 @@ export default function LoginScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <ScrollView contentContainerStyle={[styles.scrollContent, { padding: spacing.lg }]}>
+      <ScrollView contentContainerStyle={[styles.scrollContent, { padding: spacing.lg, paddingBottom: Math.max(insets.bottom, 16) + 80 }]}>
         <View style={styles.header}>
           <Text style={[styles.title, { color: colors.textPrimary }]}>Momentum Cloud</Text>
           <Text style={[styles.subtitle, { color: colors.textSecondary, marginTop: spacing.xs }]}>

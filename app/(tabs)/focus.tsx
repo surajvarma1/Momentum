@@ -21,6 +21,7 @@ import { Badge } from '../../src/presentation/components/Badge';
 import { useFocusArena } from '../../src/presentation/hooks/useFocusArena';
 import { useTasks } from '../../src/presentation/hooks/useTasks';
 import { FocusState } from '../../src/domain/focus/FocusSession';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function FocusScreen() {
   const { colors } = useTheme();
@@ -43,10 +44,18 @@ export default function FocusScreen() {
     confirmInterruption,
   } = useFocusArena();
 
+  const insets = useSafeAreaInsets();
   const { tasks } = useTasks({ status: ['PENDING', 'IN_PROGRESS'] });
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [showTaskPicker, setShowTaskPicker] = useState(false);
   const [interruptionReason, setInterruptionReason] = useState('');
+  const [customDuration, setCustomDuration] = useState(25);
+
+  const DURATION_PRESETS = [5, 10, 25, 30, 45, 60, 90, 120];
+
+  const adjustDuration = (delta: number) => {
+    setCustomDuration((prev) => Math.min(240, Math.max(1, prev + delta)));
+  };
 
   const linkedTask = tasks.find((t) => t.id === (session?.taskId || selectedTaskId));
 
@@ -67,7 +76,7 @@ export default function FocusScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: Math.max(insets.bottom, 16) + 80 }]}>
         {/* Header */}
         <View style={styles.header}>
           <View style={styles.titleRow}>
@@ -108,6 +117,108 @@ export default function FocusScreen() {
           </Pressable>
         </Card>
 
+        {/* Custom Duration Selector (when idle/ready) */}
+        {(state === FocusState.IDLE || state === FocusState.COMPLETED || state === FocusState.CANCELLED) && (
+          <Card style={[styles.durationCard, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+            <View style={styles.durationHeaderRow}>
+              <Text style={[styles.durationSectionTitle, { color: colors.textPrimary }]}>
+                Focus Session Duration
+              </Text>
+              <Text style={{ fontSize: typography.fontSize.xs, color: colors.accent, fontWeight: '700' }}>
+                ⏱️ {customDuration} minutes
+              </Text>
+            </View>
+
+            {/* Stepper */}
+            <View style={styles.durationStepperRow}>
+              <Pressable
+                onPress={() => adjustDuration(-5)}
+                disabled={customDuration <= 5}
+                style={[
+                  styles.durationStepBtn,
+                  { backgroundColor: colors.background, borderColor: colors.border },
+                  customDuration <= 5 && { opacity: 0.4 },
+                ]}
+                hitSlop={8}
+                accessibilityLabel="Decrease focus duration 5 min"
+              >
+                <Text style={[styles.durationStepBtnText, { color: colors.textPrimary }]}>−5m</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => adjustDuration(-1)}
+                disabled={customDuration <= 1}
+                style={[
+                  styles.durationStepBtn,
+                  { backgroundColor: colors.background, borderColor: colors.border },
+                  customDuration <= 1 && { opacity: 0.4 },
+                ]}
+                hitSlop={8}
+                accessibilityLabel="Decrease focus duration 1 min"
+              >
+                <Text style={[styles.durationStepBtnText, { color: colors.textPrimary }]}>−1m</Text>
+              </Pressable>
+              <Text style={[styles.durationLargeText, { color: colors.accent }]}>
+                {customDuration} <Text style={{ fontSize: typography.fontSize.sm, color: colors.textSecondary }}>min</Text>
+              </Text>
+              <Pressable
+                onPress={() => adjustDuration(1)}
+                disabled={customDuration >= 240}
+                style={[
+                  styles.durationStepBtn,
+                  { backgroundColor: colors.background, borderColor: colors.border },
+                  customDuration >= 240 && { opacity: 0.4 },
+                ]}
+                hitSlop={8}
+                accessibilityLabel="Increase focus duration 1 min"
+              >
+                <Text style={[styles.durationStepBtnText, { color: colors.textPrimary }]}>+1m</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => adjustDuration(5)}
+                disabled={customDuration >= 240}
+                style={[
+                  styles.durationStepBtn,
+                  { backgroundColor: colors.background, borderColor: colors.border },
+                  customDuration >= 240 && { opacity: 0.4 },
+                ]}
+                hitSlop={8}
+                accessibilityLabel="Increase focus duration 5 min"
+              >
+                <Text style={[styles.durationStepBtnText, { color: colors.textPrimary }]}>+5m</Text>
+              </Pressable>
+            </View>
+
+            {/* Quick Presets */}
+            <View style={styles.durationPresetsRow}>
+              {DURATION_PRESETS.map((mins) => {
+                const isSelected = customDuration === mins;
+                return (
+                  <Pressable
+                    key={mins}
+                    onPress={() => setCustomDuration(mins)}
+                    style={[
+                      styles.durationPresetChip,
+                      {
+                        backgroundColor: isSelected ? colors.accent + '25' : colors.background,
+                        borderColor: isSelected ? colors.accent : colors.border,
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.durationPresetText,
+                        { color: isSelected ? colors.accent : colors.textSecondary, fontWeight: isSelected ? '700' : '500' },
+                      ]}
+                    >
+                      {mins}m
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </Card>
+        )}
+
         {/* Big Circular Timer Display */}
         <View
           style={[
@@ -127,10 +238,14 @@ export default function FocusScreen() {
               },
             ]}
           >
-            {isBreak ? formattedElapsed : formattedRemaining}
+            {isBreak
+              ? formattedElapsed
+              : isFocusing || isPaused
+              ? formattedRemaining
+              : `${String(customDuration).padStart(2, '0')}:00`}
           </Text>
           <Text style={[styles.timerSublabel, { color: colors.textSecondary }]}>
-            {isBreak ? 'Break Time' : isPaused ? 'Paused' : `${progressPercent}% Complete`}
+            {isBreak ? 'Break Time' : isPaused ? 'Paused' : isFocusing ? `${progressPercent}% Complete` : 'Ready to Focus'}
           </Text>
         </View>
 
@@ -138,8 +253,8 @@ export default function FocusScreen() {
         <View style={styles.controlsRow}>
           {state === FocusState.IDLE || state === FocusState.COMPLETED || state === FocusState.CANCELLED ? (
             <Button
-              title="Start Focus Session"
-              onPress={() => startSession(selectedTaskId)}
+              title={`Start Focus Session (${customDuration}m)`}
+              onPress={() => startSession(selectedTaskId, customDuration)}
               size="lg"
               fullWidth
             />
@@ -315,6 +430,61 @@ const styles = StyleSheet.create({
   },
   taskCard: {
     marginBottom: spacing.base,
+  },
+  durationCard: {
+    padding: spacing.base,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    marginBottom: spacing.base,
+  },
+  durationHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing.xs,
+  },
+  durationSectionTitle: {
+    fontSize: typography.fontSize.sm,
+    fontWeight: '600',
+  },
+  durationStepperRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  durationStepBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: radii.md,
+    borderWidth: 1,
+  },
+  durationStepBtnText: {
+    fontSize: typography.fontSize.xs,
+    fontWeight: '700',
+  },
+  durationLargeText: {
+    fontSize: 28,
+    fontWeight: '800',
+    fontVariant: ['tabular-nums'],
+    marginHorizontal: spacing.xs,
+  },
+  durationPresetsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: spacing.sm,
+    justifyContent: 'space-between',
+  },
+  durationPresetChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: radii.md,
+    borderWidth: 1,
+  },
+  durationPresetText: {
+    fontSize: typography.fontSize.xs,
   },
   taskLabel: {
     fontSize: 10,

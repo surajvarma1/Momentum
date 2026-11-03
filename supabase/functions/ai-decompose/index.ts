@@ -1,5 +1,6 @@
 // Supabase Edge Function: ai-decompose
-// Deno Runtime
+// Deno Runtime — Secure Server-Side Multi-Provider AI Cascade
+// Supported Providers: NVIDIA NIM -> OpenRouter -> Google Gemini -> Bytez
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
@@ -13,16 +14,29 @@ declare const Deno: {
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
+interface AIProviderResult {
+  rawJson: string;
+  providerName: string;
+  modelName: string;
+}
+
 serve(async (req) => {
-  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
 
+  if (req.method !== 'POST') {
+    return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+      status: 405,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+
   try {
-    // 1. Verify Authentication (Supports authenticated Supabase users and guest clients with anon key)
+    // 1. Verify Authentication (Supports authenticated Supabase users and anon key clients)
     const authHeader = req.headers.get('Authorization') || req.headers.get('apikey');
     if (!authHeader) {
       return new Response(
@@ -48,27 +62,36 @@ serve(async (req) => {
       }
     }
 
-    // 2. Request size & body validation
+    // 2. Request body validation
     const rawBody = await req.text();
-    if (rawBody.length > 10240) {
-      // 10 KB limit
+    if (rawBody.length > 20480) {
+      // 20 KB limit
       return new Response(
-        JSON.stringify({ error: 'Payload too large (max 10KB)' }),
+        JSON.stringify({ error: 'Payload too large (max 20KB)' }),
         { status: 413, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       );
     }
 
-    const body = JSON.parse(rawBody);
-    const { goalDescription, deadline, preferredSessionMinutes, timezone } = body;
+    let body: any;
+    try {
+      body = JSON.parse(rawBody);
+    } catch {
+      return new Response(
+        JSON.stringify({ error: 'Invalid JSON payload' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      );
+    }
 
-    if (!goalDescription || typeof goalDescription !== 'string' || goalDescription.length < 5) {
+    const { goalDescription, deadline, preferredSessionMinutes, timezone, provider } = body;
+
+    if (!goalDescription || typeof goalDescription !== 'string' || goalDescription.trim().length < 5) {
       return new Response(
         JSON.stringify({ error: 'Invalid goalDescription (minimum 5 characters required)' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       );
     }
 
-    // 3. Quota & Rate Limit Check (resilient: does not fail if quota table is uninitialized)
+    // 3. Quota & Rate Limit Check (resilient: does not fail if table is uninitialized)
     if (user && supabaseServiceKey && supabaseUrl) {
       try {
         const adminClient = createClient(supabaseUrl, supabaseServiceKey);
@@ -80,7 +103,7 @@ serve(async (req) => {
 
         const todayDate = new Date().toISOString().split('T')[0];
         let dailyRequests = quotaData?.daily_requests_count ?? 0;
-        const dailyLimit = quotaData?.daily_quota_limit ?? 20;
+        const dailyLimit = quotaData?.daily_quota_limit ?? 30;
 
         if (quotaData && quotaData.quota_reset_date !== todayDate) {
           dailyRequests = 0; // Reset for new day
@@ -93,200 +116,486 @@ serve(async (req) => {
           );
         }
       } catch (quotaErr) {
-        console.warn('Quota check skipped due to database unavailability:', quotaErr);
+        console.warn('Quota check skipped:', quotaErr);
       }
     }
 
-    // 4. Bytez AI Inference (Qwen/Qwen3-4B via Bytez API)
-    const bytezApiKey = Deno.env.get('BYTEZ_API_KEY');
-    const bytezModel = Deno.env.get('BYTEZ_MODEL') || 'Qwen/Qwen3-4B';
+    // 4. Calculate Timeline and Persona
+    const timeline = calculateTimeline(goalDescription, deadline);
+    const persona = detectGoalPersona(goalDescription);
+    const sessionTime = preferredSessionMinutes && preferredSessionMinutes >= 5 ? preferredSessionMinutes : 25;
 
-    if (!bytezApiKey) {
+    const systemPrompt = `You are a ${persona.role}. You are an elite AI task decomposition agent.
+You MUST output ONLY a valid JSON object matching the exact schema requested without markdown code fences or conversation.
+Your response must strictly conform to:
+{
+  "goalSummary": string,
+  "milestones": [
+    { "id": "m-1", "title": string, "description": string, "order": 1 }
+  ],
+  "proposedTasks": [
+    {
+      "title": "Day 1: [Task title]",
+      "description": string,
+      "priority": "HIGH" | "MEDIUM" | "LOW",
+      "energyLevel": "HIGH" | "MEDIUM" | "LOW",
+      "estimatedDurationMinutes": number,
+      "suggestedDeadline": string,
+      "milestoneId": "m-1",
+      "subtasks": ["Subtask 1", "Subtask 2", "Subtask 3"]
+    }
+  ],
+  "assumptions": [string]
+}`;
+
+    const userPrompt = `Goal: "${goalDescription.trim()}"
+Target Timeline: Exactly ${timeline.totalDays} days.
+Daily Focus Duration: ${sessionTime} minutes per session.
+Timezone: ${timezone || 'UTC'}
+Current Reference Date: ${new Date().toISOString().split('T')[0]} (Day 1 starts on ${timeline.dayDates[0]}).
+
+Specialist Guidance:
+${persona.instructions}
+
+REQUIREMENTS:
+1. Provide progressive daily-wise tasks covering all ${timeline.totalDays} days (Day 1: ..., Day 2: ..., through Day ${timeline.totalDays}: ...).
+2. Each daily task MUST contain 3 to 5 practical, specific, actionable subtasks.
+3. Organize tasks into milestones (m-1, m-2, etc.).
+4. Calibrate intensity realistically for a ${sessionTime}-minute daily session.
+5. Strictly use current/future ISO-8601 deadlines starting from ${timeline.dayDates[0]}.
+6. Strictly return valid raw JSON only.`;
+
+    // 5. Multi-Provider Cascade: NVIDIA NIM -> OpenRouter -> Gemini -> Bytez
+    const selectedPreference = provider || 'auto';
+    const queue = resolveServerProviderQueue(selectedPreference);
+    const errorsEncountered: string[] = [];
+
+    let providerResult: AIProviderResult | null = null;
+
+    for (const p of queue) {
+      try {
+        if (p === 'nvidia') {
+          providerResult = await callNvidiaServer(systemPrompt, userPrompt);
+        } else if (p === 'openrouter') {
+          providerResult = await callOpenRouterServer(systemPrompt, userPrompt);
+        } else if (p === 'gemini') {
+          providerResult = await callGeminiServer(systemPrompt, userPrompt);
+        } else if (p === 'bytez') {
+          providerResult = await callBytezServer(systemPrompt, userPrompt);
+        }
+
+        if (providerResult && providerResult.rawJson) {
+          break;
+        }
+      } catch (err: any) {
+        errorsEncountered.push(`[${p.toUpperCase()}]: ${err.message}`);
+        console.warn(`Server provider ${p} failed: ${err.message}. Cascading to next...`);
+      }
+    }
+
+    if (!providerResult || !providerResult.rawJson) {
+      console.error('All AI providers exhausted:', errorsEncountered.join('; '));
       return new Response(
-        JSON.stringify({ error: 'AI provider is temporarily unavailable (BYTEZ_API_KEY not configured)' }),
+        JSON.stringify({
+          error: 'AI services are temporarily unavailable. Please try again shortly or create tasks manually.',
+          diagnostics: errorsEncountered,
+        }),
         { status: 503, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       );
     }
 
-    // Persona & Domain guidance
-    const lowerGoal = goalDescription.toLowerCase();
-    let personaRole = 'Executive Strategic Productivity Coach';
-    let personaGuidance = 'Decompose this goal into progressive, day-by-day execution blocks calibrated to the deadline.';
+    // 6. Extract, sanitize and structure proposal
+    const parsed = extractJson(providerResult.rawJson);
+    const sanitized = sanitizeProposal(parsed, timeline.dayDates, sessionTime);
+    sanitized.providerUsed = `${providerResult.providerName} (${providerResult.modelName})`;
 
-    if (
-      lowerGoal.includes('body') ||
-      lowerGoal.includes('gym') ||
-      lowerGoal.includes('workout') ||
-      lowerGoal.includes('muscle') ||
-      lowerGoal.includes('fitness') ||
-      lowerGoal.includes('exercise') ||
-      lowerGoal.includes('weight') ||
-      lowerGoal.includes('fat')
-    ) {
-      personaRole = 'Certified Elite Personal Fitness Trainer & Strength Coach';
-      personaGuidance = 'Act as an expert fitness trainer. Structure a progressive day-by-day workout routine (e.g., Push, Pull, Legs, Core, Active Recovery) covering the timeframe. Each day must include 3-5 specific exercises with sets and reps as subtasks.';
-    } else if (
-      lowerGoal.includes('code') ||
-      lowerGoal.includes('app') ||
-      lowerGoal.includes('software') ||
-      lowerGoal.includes('build') ||
-      lowerGoal.includes('website')
-    ) {
-      personaRole = 'Senior Engineering Manager & Technical Project Lead';
-      personaGuidance = 'Act as a senior tech lead. Structure an agile day-by-day development roadmap (architecture, models, APIs, UI screens, tests, release). Each day must have 3-5 concrete technical deliverables as subtasks.';
-    }
-
-    const prompt = `You are a ${personaRole}.
-The user has committed to this goal: "${goalDescription}".
-Target Deadline: ${deadline || 'Flexible'}
-Focus Session Duration: ${preferredSessionMinutes || 25} minutes.
-Timezone: ${timezone || 'UTC'}
-
-${personaGuidance}
-
-REQUIREMENTS:
-1. Provide a progressive day-by-day task roadmap matching the timeframe (e.g. "Day 1: ...", "Day 2: ...").
-2. Each task must have 3-5 practical actionable subtasks.
-3. Group tasks into milestone phases (e.g., "m-1": "Phase 1: Foundations", "m-2": "Phase 2: Escalation").
-4. Output must be STRICT JSON ONLY without markdown backticks or commentary.
-
-JSON Schema:
-{
-  "goalSummary": "${personaRole} roadmap for: ${goalDescription}",
-  "milestones": [
-    {"id": "m-1", "title": "Phase 1: Foundation", "description": "Focus...", "order": 1}
-  ],
-  "proposedTasks": [
-    {
-      "title": "Day 1: [Topic]",
-      "description": "Daily guidance...",
-      "priority": "HIGH",
-      "energyLevel": "HIGH",
-      "estimatedDurationMinutes": ${preferredSessionMinutes || 25},
-      "suggestedDeadline": null,
-      "milestoneId": "m-1",
-      "subtasks": ["Action 1", "Action 2", "Action 3"]
-    }
-  ],
-  "assumptions": ["Progressive periodization applied", "Tailored for ${preferredSessionMinutes || 25} min daily sessions"]
-}`;
-
-    const bytezUrl = `https://api.bytez.com/models/v2/${bytezModel}`;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 12000); // 12-second bounded server timeout
-
-    let rawContent = '';
-    try {
-      const bytezResponse = await fetch(bytezUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: bytezApiKey,
-        },
-        body: JSON.stringify({
-          messages: [
-            {
-              role: 'system',
-              content: 'You are a precise JSON-generating assistant. Do not output analysis or think tags. Respond with valid raw JSON matching the user schema only, without markdown backticks or commentary.',
-            },
-            {
-              role: 'user',
-              content: prompt,
-            },
-          ],
-          params: {
-            temperature: 0.2,
-            max_new_tokens: 2048,
-          },
-        }),
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!bytezResponse.ok) {
-        const errText = await bytezResponse.text();
-        return new Response(
-          JSON.stringify({
-            error: 'Bytez AI provider failed to generate decomposition',
-            details: errText.slice(0, 120),
-          }),
-          { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-        );
-      }
-
-      const bytezData = await bytezResponse.json();
-      if (bytezData?.error) {
-        return new Response(
-          JSON.stringify({
-            error: 'Bytez AI provider failed to generate decomposition',
-            details: String(bytezData.error).slice(0, 120),
-          }),
-          { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-        );
-      }
-
-      const output = bytezData?.output;
-      rawContent =
-        typeof output === 'string'
-          ? output
-          : typeof output?.content === 'string'
-            ? output.content
-            : Array.isArray(output?.content)
-              ? output.content
-                  .map((part: { text?: string }) => part.text || '')
-                  .join('')
-              : '';
-    } catch (fetchErr: any) {
-      clearTimeout(timeoutId);
-      const isTimeout = fetchErr.name === 'AbortError';
-      return new Response(
-        JSON.stringify({
-          error: isTimeout ? 'Bytez AI service timed out (>12s)' : 'Bytez network error',
-          details: fetchErr.message,
-        }),
-        { status: 504, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-      );
-    }
-
-    if (!rawContent) {
-      return new Response(
-        JSON.stringify({ error: 'AI returned empty content' }),
-        { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-      );
-    }
-
-    // Strip markdown code fences if model returned them
-    const cleanedContent = rawContent.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
-    const parsedProposal = JSON.parse(cleanedContent);
-
-    // 5. Update user AI quota if user and service key available
+    // 7. Record user quota if authenticated
     if (user && supabaseServiceKey && supabaseUrl) {
       try {
         const adminClient = createClient(supabaseUrl, supabaseServiceKey);
         const todayDate = new Date().toISOString().split('T')[0];
-        await adminClient
-          .from('ai_usage_quota')
-          .upsert({
-            user_id: user.id,
-            daily_requests_count: 1,
-            last_request_at: new Date().toISOString(),
-            quota_reset_date: todayDate,
-            updated_at: new Date().toISOString(),
-          });
-      } catch (quotaUpdateErr) {
-        console.warn('Quota update skipped:', quotaUpdateErr);
+        await adminClient.from('ai_usage_quota').upsert({
+          user_id: user.id,
+          daily_requests_count: 1,
+          last_request_at: new Date().toISOString(),
+          quota_reset_date: todayDate,
+          updated_at: new Date().toISOString(),
+        });
+      } catch (quotaErr) {
+        console.warn('Quota update skipped:', quotaErr);
       }
     }
 
-    return new Response(JSON.stringify(parsedProposal), {
+    return new Response(JSON.stringify(sanitized), {
       status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
-  } catch (error: any) {
+  } catch (err: any) {
+    console.error('ai-decompose unhandled error:', err);
     return new Response(
-      JSON.stringify({ error: error.message || 'Internal server error' }),
+      JSON.stringify({ error: err.message || 'Internal server error in AI decomposition' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   }
 });
+
+// Server Provider Callers
+async function callNvidiaServer(systemPrompt: string, userPrompt: string): Promise<AIProviderResult> {
+  const key = Deno.env.get('NVIDIA_API_KEY');
+  const model = Deno.env.get('NVIDIA_MODEL') || 'nvidia/nemotron-3.5-super-vl-120b-a12b';
+  if (!key) throw new Error('NVIDIA_API_KEY not configured on server');
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 35000); // 35s timeout
+
+  try {
+    const res = await fetch('https://integrate.api.nvidia.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: 0.2,
+        max_tokens: 4096,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`NVIDIA HTTP ${res.status}: ${errText.slice(0, 160)}`);
+    }
+
+    const data = await res.json();
+    const message = data?.choices?.[0]?.message;
+    const rawJson = message?.content || message?.reasoning_content || message?.reasoning || '';
+    if (!rawJson) throw new Error('NVIDIA returned empty message content');
+
+    extractJson(rawJson); // Verify parseable
+    return { rawJson, providerName: 'NVIDIA NIM', modelName: model };
+  } catch (err: any) {
+    clearTimeout(timer);
+    throw err;
+  }
+}
+
+async function callOpenRouterServer(systemPrompt: string, userPrompt: string): Promise<AIProviderResult> {
+  const key = Deno.env.get('OPENROUTER_API_KEY');
+  const configuredModel = Deno.env.get('OPENROUTER_MODEL') || 'cohere/north-mini-code:free';
+  if (!key) throw new Error('OPENROUTER_API_KEY not configured on server');
+
+  const candidateModels = [
+    configuredModel,
+    'cohere/north-mini-code:free',
+    'google/gemma-4-31b-it:free',
+    'google/gemma-4-26b-a4b-it:free',
+    'nvidia/nemotron-3.5-super-vl:free',
+    'liquid/lfm-2.5-2.6b:free',
+  ];
+  const modelsToTry = [...new Set(candidateModels.filter(Boolean))];
+
+  for (const currentModel of modelsToTry) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20000);
+    try {
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${key}`,
+          'HTTP-Referer': 'https://momentum.app',
+          'X-Title': 'Momentum Todo App',
+        },
+        body: JSON.stringify({
+          model: currentModel,
+          messages: [
+            { role: 'system', content: `${systemPrompt}\nOutput valid raw JSON only.` },
+            { role: 'user', content: userPrompt },
+          ],
+          temperature: 0.2,
+          max_tokens: 4096,
+        }),
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+
+      if (!res.ok) continue;
+      const data = await res.json();
+      const choice = data?.choices?.[0];
+      let rawJson = choice?.message?.content || choice?.message?.reasoning || '';
+      if (!rawJson.trim()) continue;
+
+      extractJson(rawJson);
+      return { rawJson, providerName: 'OpenRouter', modelName: currentModel };
+    } catch {
+      clearTimeout(timer);
+      continue;
+    }
+  }
+
+  throw new Error('All OpenRouter candidate models exhausted or timed out');
+}
+
+async function callGeminiServer(systemPrompt: string, userPrompt: string): Promise<AIProviderResult> {
+  const key = Deno.env.get('GEMINI_API_KEY');
+  const configuredModel = Deno.env.get('GEMINI_MODEL') || 'gemini-flash-lite-latest';
+  if (!key) throw new Error('GEMINI_API_KEY not configured on server');
+
+  const candidateModels = [
+    configuredModel,
+    'gemini-flash-lite-latest',
+    'gemini-2.0-flash-lite',
+    'gemini-1.5-flash-latest',
+  ];
+  const modelsToTry = [...new Set(candidateModels.filter(Boolean))];
+
+  for (const currentModel of modelsToTry) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20000);
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${key}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }] }],
+          generationConfig: {
+            temperature: 0.2,
+            maxOutputTokens: 4096,
+            responseMimeType: 'application/json',
+          },
+        }),
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+
+      if (!res.ok) continue;
+      const data = await res.json();
+      const rawJson = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      if (!rawJson) continue;
+
+      extractJson(rawJson);
+      return { rawJson, providerName: 'Google Gemini', modelName: currentModel };
+    } catch {
+      clearTimeout(timer);
+      continue;
+    }
+  }
+
+  throw new Error('All Gemini candidate models failed');
+}
+
+async function callBytezServer(systemPrompt: string, userPrompt: string): Promise<AIProviderResult> {
+  const key = Deno.env.get('BYTEZ_API_KEY');
+  const model = Deno.env.get('BYTEZ_MODEL') || 'Qwen/Qwen2.5-7B-Instruct';
+  if (!key) throw new Error('BYTEZ_API_KEY not configured on server');
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+  try {
+    const res = await fetch('https://api.bytez.com/models/v2/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: 0.2,
+        max_tokens: 4096,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+
+    if (!res.ok) {
+      throw new Error(`Bytez HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+    const rawJson = data?.choices?.[0]?.message?.content || '';
+    if (!rawJson) throw new Error('Bytez returned empty content');
+
+    extractJson(rawJson);
+    return { rawJson, providerName: 'Bytez', modelName: model };
+  } catch (err: any) {
+    clearTimeout(timer);
+    throw err;
+  }
+}
+
+function resolveServerProviderQueue(pref: string): string[] {
+  if (pref !== 'auto' && pref !== 'none') {
+    return [pref];
+  }
+  const queue: string[] = [];
+  if (Deno.env.get('NVIDIA_API_KEY')) queue.push('nvidia');
+  if (Deno.env.get('OPENROUTER_API_KEY')) queue.push('openrouter');
+  if (Deno.env.get('GEMINI_API_KEY')) queue.push('gemini');
+  if (Deno.env.get('BYTEZ_API_KEY')) queue.push('bytez');
+
+  if (queue.length === 0) {
+    // Attempt standard cascade
+    queue.push('nvidia', 'openrouter', 'gemini', 'bytez');
+  }
+  return queue;
+}
+
+function calculateTimeline(goalDescription: string, deadline?: string | null): { totalDays: number; dayDates: string[] } {
+  let days = 3;
+  const now = new Date();
+
+  const dayMatch = goalDescription.match(/(?:in|for|within)?\s*(\d+)\s*(?:days?|day)/i);
+  const weekMatch = goalDescription.match(/(?:in|for|within)?\s*(\d+)\s*(?:weeks?|week)/i);
+  const monthMatch = goalDescription.match(/(?:in|for|within)?\s*(\d+)\s*(?:months?|month)/i);
+
+  if (deadline) {
+    try {
+      const target = new Date(deadline);
+      if (!isNaN(target.getTime())) {
+        const diffMs = target.getTime() - now.getTime();
+        const calculated = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+        if (calculated > 0) {
+          days = Math.min(30, Math.max(1, calculated));
+        }
+      }
+    } catch {}
+  } else if (dayMatch && dayMatch[1]) {
+    days = Math.min(30, Math.max(1, parseInt(dayMatch[1], 10)));
+  } else if (weekMatch && weekMatch[1]) {
+    days = Math.min(30, Math.max(1, parseInt(weekMatch[1], 10) * 7));
+  } else if (monthMatch && monthMatch[1]) {
+    days = Math.min(30, Math.max(1, parseInt(monthMatch[1], 10) * 30));
+  }
+
+  const dayDates: string[] = [];
+  for (let i = 0; i < days; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i, 23, 59, 59);
+    dayDates.push(d.toISOString());
+  }
+
+  return { totalDays: days, dayDates };
+}
+
+function detectGoalPersona(goal: string): { role: string; instructions: string } {
+  const text = goal.toLowerCase();
+  if (
+    text.includes('body') ||
+    text.includes('gym') ||
+    text.includes('workout') ||
+    text.includes('muscle') ||
+    text.includes('weight') ||
+    text.includes('fat') ||
+    text.includes('chest') ||
+    text.includes('fitness') ||
+    text.includes('exercise') ||
+    text.includes('diet')
+  ) {
+    return {
+      role: 'Certified Elite Personal Fitness Trainer & Strength Coach',
+      instructions:
+        'Structure a progressive day-by-day workout routine (Push, Pull, Legs, Core, Cardio, Rest). Each day must include 3-5 specific exercises with sets and reps as subtasks.',
+    };
+  }
+  if (
+    text.includes('code') ||
+    text.includes('app') ||
+    text.includes('software') ||
+    text.includes('build') ||
+    text.includes('website') ||
+    text.includes('frontend') ||
+    text.includes('backend') ||
+    text.includes('react') ||
+    text.includes('python') ||
+    text.includes('angular')
+  ) {
+    return {
+      role: 'Senior Engineering Manager & Technical Project Lead',
+      instructions:
+        'Structure an agile day-by-day development roadmap (architecture, models, APIs, UI screens, tests, release). Each day must have 3-5 concrete technical deliverables as subtasks.',
+    };
+  }
+  if (
+    text.includes('study') ||
+    text.includes('exam') ||
+    text.includes('learn') ||
+    text.includes('course') ||
+    text.includes('book') ||
+    text.includes('read')
+  ) {
+    return {
+      role: 'Master Academic Advisor & Accelerated Learning Strategist',
+      instructions:
+        'Structure a progressive day-by-day curriculum with foundational concepts, practice drills, active recall reviews, and mock assessments leading to the target deadline.',
+    };
+  }
+  return {
+    role: 'Executive Strategic Productivity Coach',
+    instructions:
+      'Decompose this goal into progressive, day-by-day execution blocks calibrated to the deadline.',
+  };
+}
+
+function extractJson(rawText: string): any {
+  const cleaned = rawText.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+      return JSON.parse(cleaned.slice(firstBrace, lastBrace + 1));
+    }
+    throw new Error('AI returned non-JSON text format');
+  }
+}
+
+function sanitizeProposal(raw: any, dayDates: string[], defaultDuration: number): any {
+  const rawTasks = Array.isArray(raw?.proposedTasks) ? raw.proposedTasks : [];
+  const rawMilestones = Array.isArray(raw?.milestones) ? raw.milestones : [];
+  const rawAssumptions = Array.isArray(raw?.assumptions) ? raw.assumptions : [];
+
+  return {
+    goalSummary: String(raw?.goalSummary || '').slice(0, 300).trim() || 'Customized Daily Action Roadmap',
+    milestones: rawMilestones.map((m: any, idx: number) => ({
+      id: String(m?.id || `m-${idx + 1}`),
+      title: String(m?.title || `Phase ${idx + 1}`).slice(0, 100).trim(),
+      description: m?.description ? String(m.description).slice(0, 300).trim() : null,
+      order: typeof m?.order === 'number' ? m.order : idx + 1,
+    })),
+    proposedTasks: rawTasks.map((t: any, index: number) => {
+      const dur = Number(t?.estimatedDurationMinutes);
+      return {
+        title: String(t?.title || `Day ${index + 1}: Action Item`).slice(0, 200).trim(),
+        description: t?.description ? String(t.description).slice(0, 500).trim() : null,
+        priority: ['LOW', 'MEDIUM', 'HIGH', 'IMPORTANT'].includes(String(t?.priority || '').toUpperCase())
+          ? String(t.priority).toUpperCase()
+          : 'MEDIUM',
+        energyLevel: ['LOW', 'MEDIUM', 'HIGH'].includes(String(t?.energyLevel || '').toUpperCase())
+          ? String(t.energyLevel).toUpperCase()
+          : 'MEDIUM',
+        estimatedDurationMinutes: !isNaN(dur) && dur >= 5 && dur <= 480 ? Math.round(dur) : defaultDuration,
+        suggestedDeadline: dayDates[index] || new Date().toISOString(),
+        milestoneId: t?.milestoneId ? String(t.milestoneId).trim() : null,
+        subtasks: Array.isArray(t?.subtasks)
+          ? t.subtasks.map((st: any) => (typeof st === 'string' ? st : st?.title || String(st || '')).slice(0, 100).trim()).filter(Boolean).slice(0, 5)
+          : [],
+      };
+    }),
+    assumptions: rawAssumptions
+      .map((a: any) => String(a || '').slice(0, 200).trim())
+      .filter(Boolean)
+      .slice(0, 8),
+  };
+}

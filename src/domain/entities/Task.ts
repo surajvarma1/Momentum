@@ -3,6 +3,7 @@ import { EnergyLevel } from '../value-objects/EnergyLevel';
 import { TaskStatus } from '../value-objects/TaskStatus';
 import { RecurrenceRule } from '../value-objects/RecurrenceRule';
 import { Subtask } from './Subtask';
+import { isTaskDateOverdue } from '../../utils/dateUtils';
 
 export interface Task {
   readonly id: string;
@@ -64,7 +65,5 @@ export interface TaskFilter {
 
 // Helper to check if a task is overdue
 export function isTaskOverdue(task: Task, now: string): boolean {
-  if (!task.deadline) return false;
-  if (task.status === 'COMPLETED' || task.status === 'CANCELLED') return false;
-  return task.deadline < now;
+  return isTaskDateOverdue(task.deadline, task.status, now);
 }

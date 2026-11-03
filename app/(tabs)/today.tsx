@@ -27,6 +27,7 @@ import { ErrorState } from '../../src/presentation/components/ErrorState';
 import { isTaskOverdue, Task } from '../../src/domain/entities/Task';
 import { useMissedTaskRecovery } from '../../src/presentation/hooks/useMissedTaskRecovery';
 import { Button } from '../../src/presentation/components/Button';
+import { toDateOnlyString, formatDisplayDate } from '../../src/utils/dateUtils';
 
 export default function TodayScreen() {
   const { colors } = useTheme();
@@ -51,7 +52,7 @@ export default function TodayScreen() {
   } = useMissedTaskRecovery();
 
   const now = services.clock.now();
-  const todayStr = now.split('T')[0];
+  const todayStr = toDateOnlyString(new Date());
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -61,17 +62,7 @@ export default function TodayScreen() {
 
   const isDateToday = (dateStr: string | null | undefined): boolean => {
     if (!dateStr) return false;
-    try {
-      const d = new Date(dateStr);
-      const cur = new Date();
-      return (
-        d.getFullYear() === cur.getFullYear() &&
-        d.getMonth() === cur.getMonth() &&
-        d.getDate() === cur.getDate()
-      );
-    } catch {
-      return false;
-    }
+    return toDateOnlyString(dateStr) === todayStr;
   };
 
   // Derived task subsets

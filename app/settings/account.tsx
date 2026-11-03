@@ -9,9 +9,11 @@ import { Badge } from '../../src/presentation/components/Badge';
 import { ScreenHeader } from '../../src/presentation/components/ScreenHeader';
 import { useAuthStore } from '../../src/presentation/stores/authStore';
 import { ServiceContainer } from '../../src/services/ServiceContainer';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 export default function AccountSettingsScreen() {
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const { user, isGuest, logout } = useAuthStore();
 
   const [outboxCount, setOutboxCount] = useState<number>(0);
@@ -76,7 +78,7 @@ export default function AccountSettingsScreen() {
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <ScreenHeader title="Account & Cloud Sync" />
 
-      <ScrollView contentContainerStyle={{ padding: spacing.lg }}>
+      <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: Math.max(insets.bottom, 16) + 80 }}>
         {/* Account Info Card */}
         <Card style={{ padding: spacing.md, marginBottom: spacing.md }}>
           <View style={styles.rowBetween}>
